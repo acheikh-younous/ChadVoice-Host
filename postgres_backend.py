@@ -37,7 +37,8 @@ class PgConnection:
         from psycopg.rows import dict_row
         s=sql.strip()
         if s.upper()=='BEGIN IMMEDIATE':
-            cur=self.conn.execute('SELECT pg_advisory_xact_lock(2026101701)',row_factory=dict_row)
+            cur=self.conn.cursor(row_factory=dict_row)
+            cur.execute('SELECT pg_advisory_xact_lock(2026101701)')
             return QueryResult(cur)
         # Compatible SQL string/time syntax. UTC timestamps use text fields as in SQLite.
         s=re.sub(r"datetime\('now'\)","to_char(now() at time zone 'UTC','YYYY-MM-DD HH24:MI:SS')",s,flags=re.IGNORECASE)
