@@ -1,0 +1,24 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}ChadVoice{% endblock %} · Plateforme de traduction</title><link rel="stylesheet" href="/static/app.css"></head>
+<body>
+{% if user %}<div class="layout"><aside class="sidebar">
+  <div class="brand"><div class="brand-icon">◉</div><div><strong>ChadVoice</strong><small>Corpus collaboratif</small></div></div>
+  <div class="group-label">ESPACE DE TRAVAIL</div>
+  <nav><a href="/" class="nav{% if request.url.path=='/' %} active{% endif %}"><span>▦</span> Vue générale</a>
+  {% if user.role in ['contributor','admin'] %}<a href="/contribute" class="nav{% if request.url.path.startswith('/contribute') %} active{% endif %}"><span>◉</span> Contribuer</a>{% endif %}
+  {% if user.role in ['reviewer','admin'] %}<a href="/review" class="nav{% if request.url.path.startswith('/review') %} active{% endif %}"><span>✓</span> Réviser</a>{% endif %}
+  {% if user.role=='admin' %}<a href="/admin" class="nav{% if request.url.path.startswith('/admin') %} active{% endif %}"><span>⚙</span> Administration</a>{% endif %}
+  <a href="/notifications" class="nav{% if request.url.path=='/notifications' %} active{% endif %}"><span>✉</span> Notifications {% if unread %}<strong class="unread-badge">{{unread}}</strong>{% endif %}</a>
+  <a href="/account" class="nav{% if request.url.path=='/account' %} active{% endif %}"><span>♙</span> Mon compte</a>
+  </nav>
+  <div class="sidebar-bottom"><div class="security-note">🔒 &nbsp; Audios privés · accès contrôlé</div>
+  <div class="profile-b"><span class="avatar">{{ user.full_name[0]|upper }}</span><div><strong>{{ user.full_name }}</strong><small>{{ {'admin':'Administrateur','reviewer':'Réviseur agréé','contributor':'Contributeur'}[user.role] }}</small></div></div>
+  <form action="/logout" method="post"><input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="signout" type="submit">Se déconnecter <span>↗</span></button></form></div>
+</aside><main class="main"><header class="mobile-top"><div class="brand-icon">◉</div><strong>ChadVoice</strong><span class="spacer"></span><span class="mini-label">{{ user.full_name }}</span></header><div class="content">
+{% else %}<div class="public-layout">
+{% endif %}
+{% if msg %}<div class="notice" role="status">{{ msg }}</div>{% endif %}
+{% block content %}{% endblock %}
+{% if user %}</div><footer class="footer">ChadVoice · Recherche linguistique · Vos contributions sont réservées à l'équipe autorisée</footer></main></div>
+{% else %}</div>{% endif %}
+<script src="/static/app.js" defer></script></body></html>

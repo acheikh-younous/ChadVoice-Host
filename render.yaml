@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: chadvoice-pilote
+    runtime: python
+    plan: free
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: CHADVOICE_HTTPS
+        value: '1'
+      - key: CHADVOICE_AUDIO_STORAGE
+        value: s3
+      - key: DATABASE_URL
+        sync: false
+      - key: AWS_ENDPOINT_URL_S3
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: CHADVOICE_BOOTSTRAP_TOKEN
+        sync: false

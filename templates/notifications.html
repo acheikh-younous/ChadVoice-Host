@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block title %}Notifications{% endblock %}{% block content %}
+<div class="eyebrow">SUIVI DES CONTRIBUTIONS</div><h1>Mes notifications</h1><p class="lead">Toutes les décisions sont conservées ici. Les e-mails sont un complément facultatif et ne remplacent pas cette boîte.</p>
+<section class="card after-card"><h2>Décisions et motifs</h2>{% if items %}<div class="history-list">{% for n in items %}
+<div><div><strong>{% if not n.read_at %}● {% endif %}{{n.title}}</strong><p class="muted">{{n.created_at}} · {{n.code or 'Compte'}}</p><p class="read-text">{{n.message}}</p></div>
+{% if not n.read_at %}<form action="/notifications/{{n.id}}/read" method="post"><input type="hidden" name="csrf" value="{{user.csrf}}"><button class="btn secondary" type="submit">Lire / ouvrir →</button></form>{% elif n.segment_id and n.category in ['rejected','needs_changes'] %}<a class="btn secondary" href="/contribute?segment={{n.segment_id}}">Ouvrir le segment →</a>{% endif %}</div>
+{% endfor %}</div>{% else %}<div class="empty">Vous n'avez pas encore de notification.</div>{% endif %}</section>
+{% endblock %}
