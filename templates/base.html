@@ -2,7 +2,13 @@
 <title>{% block title %}ChadVoice{% endblock %} · Plateforme de traduction</title><link rel="stylesheet" href="/static/app.css"></head>
 <body>
 {% if user %}<div class="layout"><aside class="sidebar">
-  <div class="brand"><div class="brand-icon">◉</div><div><strong>ChadVoice</strong><small>Corpus collaboratif</small></div></div>
+  <div class="brand">
+    <img src="/static/chadvoice_logo.png" alt="Logo ChadVoice" class="brand-logo">
+    <div>
+      <strong>ChadVoice</strong>
+      <small>Corpus collaboratif</small>
+    </div>
+  </div>
   <div class="group-label">ESPACE DE TRAVAIL</div>
   <nav><a href="/" class="nav{% if request.url.path=='/' %} active{% endif %}"><span>▦</span> Vue générale</a>
   {% if user.role in ['contributor','admin'] %}<a href="/contribute" class="nav{% if request.url.path.startswith('/contribute') %} active{% endif %}"><span>◉</span> Contribuer</a>{% endif %}
