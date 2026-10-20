@@ -2,7 +2,7 @@
 <title>{% block title %}ChadVoice{% endblock %} · Plateforme de traduction</title><link rel="stylesheet" href="/static/app.css"></head>
 <body>
 {% if user %}<div class="layout"><aside class="sidebar">
-  <div class="brand"><div class="brand-icon">◉</div><div><strong>ChadVoice</strong><small>Corpus collaboratif</small></div></div>
+  <div class="brand"><img src="/static/chadvoice_logo.png" alt="Logo ChadVoice" class="brand-logo" width="42" height="42"><div><strong>ChadVoice</strong><small>Corpus collaboratif</small></div></div>
   <div class="group-label">ESPACE DE TRAVAIL</div>
   <nav><a href="/" class="nav{% if request.url.path=='/' %} active{% endif %}"><span>▦</span> Vue générale</a>
   {% if user.role in ['contributor','admin'] %}<a href="/contribute" class="nav{% if request.url.path.startswith('/contribute') %} active{% endif %}"><span>◉</span> Contribuer</a>{% endif %}
@@ -14,7 +14,7 @@
   <div class="sidebar-bottom"><div class="security-note">🔒 &nbsp; Audios privés · accès contrôlé</div>
   <div class="profile-b"><span class="avatar">{{ user.full_name[0]|upper }}</span><div><strong>{{ user.full_name }}</strong><small>{{ {'admin':'Administrateur','reviewer':'Réviseur agréé','contributor':'Contributeur'}[user.role] }}</small></div></div>
   <form action="/logout" method="post"><input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="signout" type="submit">Se déconnecter <span>↗</span></button></form></div>
-</aside><main class="main"><header class="mobile-top"><div class="brand-icon">◉</div><strong>ChadVoice</strong><span class="spacer"></span><span class="mini-label">{{ user.full_name }}</span></header><div class="content">
+</aside><main class="main"><header class="mobile-top"><img src="/static/chadvoice_logo.png" alt="Logo ChadVoice" class="brand-logo-mobile" width="32" height="32"><strong>ChadVoice</strong><span class="spacer"></span><span class="mini-label">{{ user.full_name }}</span></header><div class="content">
 {% else %}<div class="public-layout">
 {% endif %}
 {% if msg %}<div class="notice" role="status">{{ msg }}</div>{% endif %}
