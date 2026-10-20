@@ -55,3 +55,21 @@ def test_s3_path_and_chunking(monkeypatch,tmp_path):
     assert st.audio_response_payload('x.wav','bad range') is None
     st.remove_audio_file(tmp_path/'x.wav','x.wav')
     assert fake.objects=={}
+
+
+def test_pg_advisory_lock_uses_cursor(monkeypatch):
+    """Guard the recent lock fix without connecting to PostgreSQL."""
+    from postgres_backend import PgConnection
+    rows = types.ModuleType('psycopg.rows')
+    rows.dict_row = object()
+    monkeypatch.setitem(sys.modules, 'psycopg', types.ModuleType('psycopg'))
+    monkeypatch.setitem(sys.modules, 'psycopg.rows', rows)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = {'pg_advisory_xact_lock': None}
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    result = PgConnection(connection).execute('BEGIN IMMEDIATE')
+    connection.cursor.assert_called_once_with(row_factory=rows.dict_row)
+    cursor.execute.assert_called_once_with('SELECT pg_advisory_xact_lock(2026101701)')
+    connection.execute.assert_not_called()
+    assert result.fetchone()[0] is None

@@ -13,12 +13,6 @@
   flex-shrink:0;
 }
 
-.brand{
-  display:flex;
-  gap:10px;
-  align-items:center;
-  padding:1px 7px 26px;
-}
 
 .login-logo{
   width:120px;
@@ -32,8 +26,12 @@
 }
 
 .brand-logo-mobile{
+  flex-shrink:0;
   width:32px;
   height:32px;
   object-fit:contain;
   display:block;
 }
+
+.mobile-top .mini-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:800px){.login-logo{width:72px;height:72px}}
