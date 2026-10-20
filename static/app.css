@@ -4,3 +4,36 @@
 .unread-badge{margin-left:auto;background:#e7b658;color:#1d2640;border-radius:100px;padding:1px 8px;font-size:12px}
 .history-list a.btn{white-space:nowrap;font-size:13px}
 .tag.rejected{background:#ffe6df;color:#842e20}
+
+.brand-logo{
+  width:42px;
+  height:42px;
+  object-fit:contain;
+  display:block;
+  flex-shrink:0;
+}
+
+.brand{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  padding:1px 7px 26px;
+}
+
+.login-logo{
+  width:120px;
+  height:120px;
+  object-fit:contain;
+  display:block;
+}
+
+.large-logo-wrap{
+  margin-bottom:18px;
+}
+
+.brand-logo-mobile{
+  width:32px;
+  height:32px;
+  object-fit:contain;
+  display:block;
+}
