@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% block title %}Gestion de {{s.code}}{% endblock %}{% block content %}
+<a class="back" href="/admin/segments">← Bibliothèque des audios</a>
+<div class="eyebrow">GESTION DU CORPUS</div><h1>{{s.code}} — {{s.original_name}}</h1>
+<p>État : <strong>{{'Archivé' if s.archived_at else status_label[s.status]}}</strong> · Source : {{s.source_id or '—'}} · Locuteur : {{s.speaker_id or '—'}}</p>
+<div class="columns-2"><section class="card"><h2>Écouter le segment</h2><audio controls preload="none" src="/audio/{{s.id}}" style="width:100%"></audio>
+<p class="muted">Nom affiché modifiable ; fichier original conservé dans le stockage privé.</p>
+<h2>Renommer / modifier les métadonnées</h2><form method="post" action="/admin/segments/{{s.id}}/metadata" class="form-stack">
+<input type="hidden" name="csrf" value="{{user.csrf}}"><label>Nom affiché<input name="name" maxlength="180" required value="{{s.original_name}}"></label>
+<label>Source / film / session<input name="source_id" maxlength="180" value="{{s.source_id}}"></label>
+<label>Locuteur<input name="speaker_id" maxlength="180" value="{{s.speaker_id}}"></label><button class="btn secondary">Enregistrer les métadonnées</button></form></section>
+<section class="card"><h2>Transcription et traduction</h2>
+{% if s.contributor %}<p class="muted">Contributeur : {{s.contributor}}</p>{% endif %}
+<p><strong>Arabe tchadien latin</strong></p><div class="notice">{{s.latin or 'Aucune transcription soumise'}}</div>
+<p><strong>Traduction française</strong></p><div class="notice">{{s.french or 'Aucune traduction soumise'}}</div>
+{% if latest_approval and s.status=='approved' %}<p><strong>Dernière version approuvée</strong></p>
+<p>{{latest_approval.final_latin}}</p><p>{{latest_approval.final_french}}</p>{% endif %}
+{% if s.status=='submitted' and not s.archived_at %}<a href="/review/{{s.id}}" class="btn primary">Réviser individuellement</a>{% endif %}
+</section></div>
+{% if s.status=='approved' and not s.archived_at %}
+<div class="columns-2 after-card"><section class="card"><h2>Retirer une validation erronée</h2><p>La validation précédente reste dans l'historique, mais le segment sort immédiatement des exports validés. Le contributeur pourra corriger.</p>
+<form action="/admin/segments/{{s.id}}/revoke-approval" method="post" class="form-stack" data-confirm="Retirer cette validation ? Le contributeur recevra une notification et devra corriger.">
+<input type="hidden" name="csrf" value="{{user.csrf}}"><label>Motif obligatoire<textarea name="note" minlength="6" maxlength="3000" required></textarea></label>
+<button class="btn secondary" type="submit">Retirer la validation / demander correction</button></form></section>
+<section class="card"><h2>Corriger le texte final approuvé</h2><p>Crée une nouvelle décision d'approbation historisée ; ne modifie pas la proposition du contributeur.</p>
+<form action="/admin/segments/{{s.id}}/correct-approval" method="post" class="form-stack">
+<input type="hidden" name="csrf" value="{{user.csrf}}"><label>Arabe tchadien latin<textarea name="latin" maxlength="5000" required>{{latest_approval.final_latin if latest_approval else s.latin}}</textarea></label>
+<label>Français<textarea name="french" maxlength="5000" required>{{latest_approval.final_french if latest_approval else s.french}}</textarea></label>
+<label>Motif de correction<textarea name="note" minlength="6" maxlength="3000" required></textarea></label>
+<button class="btn primary" type="submit">Enregistrer la nouvelle version validée</button></form></section></div>{% endif %}
+<section class="card after-card"><h2>Gestion du fichier</h2><div class="button-row">
+{% if s.archived_at %}<form action="/admin/segments/{{s.id}}/restore" method="post"><input type="hidden" name="csrf" value="{{user.csrf}}"><button class="btn secondary">Restaurer</button></form>
+{% elif not busy %}<form action="/admin/segments/{{s.id}}/archive" method="post"><input type="hidden" name="csrf" value="{{user.csrf}}"><button class="btn secondary">Archiver (sans effacer)</button></form>{% endif %}
+{% if s.status=='available' and not s.assigned_to and not busy and not has_history %}<form action="/admin/segments/{{s.id}}/delete" method="post" data-confirm="Suppression définitive du fichier audio non annoté ?"><input type="hidden" name="csrf" value="{{user.csrf}}"><input type="hidden" name="confirm_code" value="{{s.code}}"><button class="btn secondary" type="submit">Supprimer définitivement</button></form>{% else %}<span class="muted">Suppression définitive interdite si une contribution ou un historique existe ; archivez plutôt.</span>{% endif %}
+</div></section>
+<section class="card after-card"><h2>Historique des décisions</h2>{% for r in reviews %}<p><strong>{{r.decision}}</strong> — {{r.reviewer}} — {{r.created_at}}<br>{{r.note}}</p>{% else %}<p>Aucune décision.</p>{% endfor %}</section>
+{% endblock %}

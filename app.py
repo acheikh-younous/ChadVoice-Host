@@ -89,6 +89,11 @@ def init_db():
           active INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS user_presence (
+          user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          last_seen INTEGER NOT NULL DEFAULT 0,
+          last_path TEXT NOT NULL DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS sessions (
           token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           csrf TEXT NOT NULL, expiry INTEGER NOT NULL
@@ -106,6 +111,7 @@ def init_db():
           status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','assigned','draft','submitted','needs_changes','approved','rejected','inaudible')),
           assigned_to INTEGER REFERENCES users(id),
           expires_at INTEGER,
+          archived_at TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS translations (
@@ -177,6 +183,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS ix_segment_status ON segments(status, id);
         CREATE INDEX IF NOT EXISTS ix_reviewer_seg ON reviews(segment_id,id);
         ''')
+        # Backwards-compatible v1.3 migration for existing SQLite databases.
+        if 'archived_at' not in [row['name'] for row in cx.execute('PRAGMA table_info(segments)')]:
+            cx.execute('ALTER TABLE segments ADD COLUMN archived_at TEXT')
         # Migrate legacy v1.0 pre-submission assignments to temporary previews.
         now=int(time.time())
         for row in cx.execute("SELECT id,assigned_to,status FROM segments WHERE status IN ('assigned','draft') AND assigned_to IS NOT NULL").fetchall():
@@ -277,13 +286,34 @@ def create_user(email: str, name: str, pw: str, role='contributor'):
 def log(cx, actor, action, seg=None, details=''):
     cx.execute('INSERT INTO audit_logs(actor_id,action,segment_id,details) VALUES(?,?,?,?)',(actor,action,seg,str(details)[:1000]))
 
+def segment_has_history(cx, sid):
+    tables=('translations','translation_versions','reviews','working_leases','notifications')
+    return any(cx.execute(f'SELECT 1 FROM {table} WHERE segment_id=? LIMIT 1',(sid,)).fetchone()
+               for table in tables) or bool(cx.execute(
+        "SELECT 1 FROM audit_logs WHERE segment_id=? AND action='preview_started' LIMIT 1",(sid,)).fetchone())
+
+def mark_presence(cx,user_id,now,path):
+    # Record section-level activity with at most one update per minute.
+    path=path if path in ('/','/contribute','/review','/admin','/account','/notifications') else ('/admin' if path.startswith('/admin/') else '/review' if path.startswith('/review/') else '/contribute' if path.startswith('/contribute/') else '')
+    if not path:
+        return
+    row=cx.execute('SELECT last_seen,last_path FROM user_presence WHERE user_id=?',(user_id,)).fetchone()
+    if row and now-int(row['last_seen'])<60 and row['last_path']==path:
+        return
+    cx.execute('''INSERT INTO user_presence(user_id,last_seen,last_path) VALUES(?,?,?)
+        ON CONFLICT(user_id) DO UPDATE SET last_seen=excluded.last_seen,last_path=excluded.last_path''',(user_id,now,path))
+
+
 def user_session(req: Request):
     raw=req.cookies.get('cv_session','')
     if not raw: return None,None
+    now=int(time.time())
     with db() as cx:
         row=cx.execute('''SELECT u.*,s.csrf,s.expiry FROM sessions s JOIN users u ON s.user_id=u.id
           WHERE s.token_hash=?''',(hashlib.sha256(raw.encode()).hexdigest(),)).fetchone()
-    if not row or not row['active'] or row['expiry']<=int(time.time()): return None,None
+        if row and row['active'] and row['expiry']>now:
+            mark_presence(cx,row['id'],now,req.url.path)
+    if not row or not row['active'] or row['expiry']<=now: return None,None
     return dict(row),raw
 
 def page(req, filename, *, user=None, status=200, **values):
@@ -321,8 +351,9 @@ def secure(req, user, csrf, roles=None):
 STATUS_LABEL = {'available':'Disponible','assigned':'Attribué','draft':'Brouillon','submitted':'En révision','needs_changes':'À corriger','approved':'Validé','rejected':'Rejeté — à corriger','inaudible':'Inaudible'}
 
 def read_stats(cx):
-    data={r['status']:r['n'] for r in cx.execute('SELECT status, count(*) n FROM segments GROUP BY status')}
-    return {**{s:0 for s in STATUS_LABEL},**data,'total':sum(data.values())}
+    data={r['status']:r['n'] for r in cx.execute('SELECT status, count(*) n FROM segments WHERE archived_at IS NULL GROUP BY status')}
+    archived=cx.execute('SELECT count(*) FROM segments WHERE archived_at IS NOT NULL').fetchone()[0]
+    return {**{s:0 for s in STATUS_LABEL},**data,'total':sum(data.values()),'archived':archived}
 
 @app.get('/health')
 def health():
@@ -334,10 +365,26 @@ def home(req:Request):
     u=require(req)
     if not u: return redirect('/login')
     with db() as cx:
-        stats=read_stats(cx)
+        # Only privileged users can request aggregate statistics.
+        stats=read_stats(cx) if u['role'] in ('admin','reviewer') else None
         mine=cx.execute('''SELECT count(*) n FROM translations WHERE contributor_id=? AND submitted_at IS NOT NULL''',(u['id'],)).fetchone()['n']
         my_reviews=cx.execute('SELECT count(*) n FROM reviews WHERE reviewer_id=?',(u['id'],)).fetchone()['n']
-    return page(req,'dashboard.html',user=u,stats=stats,mine=mine,my_reviews=my_reviews,msg=req.query_params.get('msg',''))
+        personal=None
+        if u['role']=='contributor':
+            counts={r['status']:r['n'] for r in cx.execute('''SELECT s.status,count(*) n
+                FROM translations t JOIN segments s ON s.id=t.segment_id
+                WHERE t.contributor_id=? AND t.submitted_at IS NOT NULL
+                GROUP BY s.status''',(u['id'],))}
+            personal={'submitted':mine,'approved':counts.get('approved',0),
+                'in_review':counts.get('submitted',0),
+                'corrections':counts.get('needs_changes',0)+counts.get('rejected',0),
+                'inaudible':counts.get('inaudible',0)}
+            personal['approval_percent']=round(100*personal['approved']/mine,1) if mine else 0
+            personal['recent']=[dict(r) for r in cx.execute('''SELECT s.id,s.code,s.status,t.submitted_at
+                FROM translations t JOIN segments s ON s.id=t.segment_id
+                WHERE t.contributor_id=? AND t.submitted_at IS NOT NULL
+                ORDER BY t.updated_at DESC,s.id DESC LIMIT 8''',(u['id'],))]
+    return page(req,'dashboard.html',user=u,stats=stats,mine=mine,my_reviews=my_reviews,personal=personal,msg=req.query_params.get('msg',''))
 
 @app.get('/login',response_class=HTMLResponse)
 def login_page(req: Request):
@@ -355,6 +402,7 @@ def login(req: Request,email: str=Form(...),password: str=Form(...)):
         raw=secrets.token_urlsafe(36)
         cx.execute('INSERT INTO sessions(token_hash,user_id,csrf,expiry) VALUES(?,?,?,?)',(
             hashlib.sha256(raw.encode()).hexdigest(),u['id'],secrets.token_urlsafe(32),int(time.time())+SESSION_TTL))
+        mark_presence(cx,u['id'],int(time.time()),'/')
         log(cx,u['id'],'login')
     r=redirect('/')
     r.set_cookie('cv_session',raw,max_age=SESSION_TTL,httponly=True,samesite='strict',secure=os.getenv('CHADVOICE_HTTPS','0')=='1',path='/')
@@ -430,26 +478,26 @@ def contribute(req:Request):
         corrections=cx.execute('''SELECT s.id,s.code,s.status,r.note FROM segments s
           JOIN translations t ON t.segment_id=s.id
           JOIN reviews r ON r.id=(SELECT MAX(r2.id) FROM reviews r2 WHERE r2.segment_id=s.id)
-          WHERE s.assigned_to=? AND t.contributor_id=? AND s.status IN ('needs_changes','rejected')
+          WHERE s.archived_at IS NULL AND s.assigned_to=? AND t.contributor_id=? AND s.status IN ('needs_changes','rejected')
           ORDER BY r.id DESC''',(u['id'],u['id'])).fetchall()
         lease=cx.execute('''SELECT s.*,t.latin,t.french,t.reported_inaudible,t.submitted_at,
             w.expires_at lease_expires_at FROM working_leases w JOIN segments s ON s.id=w.segment_id
             LEFT JOIN translations t ON t.segment_id=s.id AND t.contributor_id=w.user_id
-            WHERE w.user_id=?''',(u['id'],)).fetchone()
+            WHERE w.user_id=? AND s.archived_at IS NULL''',(u['id'],)).fetchone()
         correction_id=next((x['id'] for x in corrections if str(x['id'])==selected),None)
         if correction_id is None and corrections: correction_id=corrections[0]['id']
         if correction_id:
             pending=cx.execute('''SELECT s.*,t.latin,t.french,t.reported_inaudible,t.submitted_at,
               NULL lease_expires_at FROM segments s JOIN translations t ON t.segment_id=s.id
-              WHERE s.id=?''',(correction_id,)).fetchone()
+              WHERE s.id=? AND s.archived_at IS NULL''',(correction_id,)).fetchone()
         else:pending=lease
         my_last=cx.execute('''SELECT s.id,s.code,s.status,t.updated_at FROM translations t
-          JOIN segments s ON s.id=t.segment_id WHERE t.contributor_id=?
+          JOIN segments s ON s.id=t.segment_id WHERE t.contributor_id=? AND s.archived_at IS NULL
           ORDER BY t.updated_at DESC LIMIT 16''',(u['id'],)).fetchall()
         reviewnote=None
         if pending and pending['status'] in ('needs_changes','rejected'):
             reviewnote=cx.execute("SELECT note FROM reviews WHERE segment_id=? AND decision IN ('needs_changes','rejected') ORDER BY id DESC LIMIT 1",(pending['id'],)).fetchone()
-        stats=read_stats(cx)
+        stats=read_stats(cx) if u['role']=='admin' else None
     return page(req,'contribute.html',user=u,seg=pending,reviewnote=reviewnote,stats=stats,mine=my_last,corrections=corrections,msg=req.query_params.get('msg',''))
 
 @app.post('/claim')
@@ -461,16 +509,16 @@ def claim(req:Request,csrf:str=Form(...)):
         expire_leases(cx)
         existing=cx.execute('SELECT segment_id FROM working_leases WHERE user_id=?',(u['id'],)).fetchone()
         if existing:return redirect('/contribute',msg='Vous avez déjà un segment en consultation. Soumettez ou libérez-le.')
-        correction=cx.execute("SELECT id FROM segments WHERE assigned_to=? AND status IN ('needs_changes','rejected') LIMIT 1",(u['id'],)).fetchone()
+        correction=cx.execute("SELECT id FROM segments WHERE archived_at IS NULL AND assigned_to=? AND status IN ('needs_changes','rejected') LIMIT 1",(u['id'],)).fetchone()
         if correction:return redirect('/contribute',msg='Corrigez votre contribution rejetée avant de prendre un autre segment.')
-        segment=cx.execute('''SELECT id FROM segments WHERE status='available' AND
+        segment=cx.execute('''SELECT id FROM segments WHERE archived_at IS NULL AND status='available' AND
            NOT EXISTS(SELECT 1 FROM working_leases w WHERE w.segment_id=segments.id)
            ORDER BY id LIMIT 1''').fetchone()
         if not segment:return redirect('/contribute',msg='Aucun nouveau segment disponible.')
         cx.execute('INSERT INTO working_leases(segment_id,user_id,expires_at) VALUES(?,?,?)',
           (segment['id'],u['id'],int(time.time())+LEASE))
         log(cx,u['id'],'preview_started',segment['id'])
-    return redirect('/contribute',msg='Consultation temporaire de 30 minutes ; attribution définitive lors de la soumission.')
+    return redirect('/contribute',msg='Segment ouvert. Écoutez-le, transcrivez et traduisez, ou libérez-le si vous ne pouvez pas continuer.')
 
 @app.post('/contribute/{sid}/save')
 def save(req:Request,sid:int,csrf:str=Form(...),latin:str=Form(''),french:str=Form(''),action:str=Form('draft'),inaudible:str=Form('')):
@@ -486,6 +534,8 @@ def save(req:Request,sid:int,csrf:str=Form(...),latin:str=Form(''),french:str=Fo
         expire_leases(cx)
         seg=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
         lease=cx.execute('SELECT * FROM working_leases WHERE segment_id=? AND user_id=?',(sid,u['id'])).fetchone()
+        if seg and seg['archived_at'] is not None:
+            return page(req,'error.html',user=u,error='Ce segment est archivé.',status=409)
         correcting=seg and seg['assigned_to']==u['id'] and seg['status'] in ('needs_changes','rejected')
         temporary=seg and seg['status']=='available' and lease is not None
         if not (correcting or temporary):
@@ -507,7 +557,7 @@ def save(req:Request,sid:int,csrf:str=Form(...),latin:str=Form(''),french:str=Fo
         elif correcting and action=='submit':
             cx.execute("UPDATE segments SET status='submitted',expires_at=NULL WHERE id=?",(sid,))
         log(cx,u['id'],action,sid)
-    return redirect('/contribute',msg='Contribution soumise à la révision.' if action=='submit' else 'Brouillon conservé ; consultation prolongée de 48 heures.')
+    return redirect('/contribute',msg='Contribution soumise à la révision.' if action=='submit' else 'Brouillon enregistré. Vous pouvez revenir le compléter avant de soumettre.')
 
 @app.post('/contribute/{sid}/release')
 def release(req:Request,sid:int,csrf:str=Form(...)):
@@ -553,7 +603,7 @@ def review_list(req:Request):
         records=cx.execute('''SELECT s.id,s.code,s.status,s.source_id,s.speaker_id,t.submitted_at,u.full_name contributor
            FROM segments s JOIN translations t ON t.segment_id=s.id
            JOIN users u ON u.id=t.contributor_id
-           WHERE s.status='submitted' AND t.contributor_id<>? ORDER BY t.submitted_at,s.id LIMIT 200''',(u['id'],)).fetchall()
+           WHERE s.archived_at IS NULL AND s.status='submitted' AND t.contributor_id<>? ORDER BY t.submitted_at,s.id LIMIT 200''',(u['id'],)).fetchall()
         recent=cx.execute('''SELECT s.code,r.decision,r.created_at FROM reviews r JOIN segments s ON r.segment_id=s.id
            WHERE r.reviewer_id=? ORDER BY r.id DESC LIMIT 10''',(u['id'],)).fetchall()
     return page(req,'review_list.html',user=u,items=records,recent=recent,msg=req.query_params.get('msg',''))
@@ -567,6 +617,8 @@ def review_one(req:Request,sid:int):
             t.contributor_id,u.full_name contributor FROM segments s JOIN translations t ON t.segment_id=s.id
             JOIN users u ON u.id=t.contributor_id WHERE s.id=?''',(sid,)).fetchone()
         if not item:return page(req,'error.html',user=u,error='Segment introuvable',status=404)
+        if item['archived_at'] is not None:
+            return page(req,'error.html',user=u,error='Segment archivé par l’administrateur.',status=403)
         if item['contributor_id']==u['id']:return page(req,'error.html',user=u,error='Vous ne pouvez pas réviser votre propre contribution.',status=403)
         if item['status'] not in ('submitted','approved','rejected','needs_changes','inaudible'):
             return page(req,'error.html',user=u,error='Brouillon non accessible aux réviseurs.',status=403)
@@ -589,7 +641,7 @@ def decide(req:Request,sid:int,background_tasks:BackgroundTasks,csrf:str=Form(..
         cx.execute('BEGIN IMMEDIATE')
         seg=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
         tr=cx.execute('SELECT * FROM translations WHERE segment_id=?',(sid,)).fetchone()
-        if not seg or not tr or seg['status']!='submitted' or tr['contributor_id']==u['id']:
+        if not seg or seg['archived_at'] is not None or not tr or seg['status']!='submitted' or tr['contributor_id']==u['id']:
             return page(req,'error.html',user=u,error='Révision impossible : statut modifié ou droits insuffisants.',status=409)
         cx.execute('INSERT INTO reviews(segment_id,reviewer_id,decision,final_latin,final_french,note) VALUES(?,?,?,?,?,?)',
            (sid,u['id'],decision,latin,french,note))
@@ -606,17 +658,167 @@ def administration(req:Request):
     if not u:return redirect('/' if require(req) else '/login')
     with db() as cx:
         stats=read_stats(cx)
-        people=cx.execute('''SELECT u.id,u.full_name,u.email,u.role,u.active,u.created_at,
+        people=cx.execute('''SELECT u.id,u.full_name,u.email,u.role,u.active,u.created_at,p.last_seen,p.last_path,
            (SELECT count(*) FROM translations t WHERE t.contributor_id=u.id AND t.submitted_at IS NOT NULL) contributions,
            (SELECT count(*) FROM reviews r WHERE r.reviewer_id=u.id) validations
-          FROM users u ORDER BY u.id''').fetchall()
+          FROM users u LEFT JOIN user_presence p ON p.user_id=u.id ORDER BY u.id''').fetchall()
         segments=cx.execute('''SELECT s.*,u.full_name contributor,w.user_id lease_user,
+          (EXISTS(SELECT 1 FROM translations t WHERE t.segment_id=s.id) OR
+           EXISTS(SELECT 1 FROM translation_versions v WHERE v.segment_id=s.id) OR
+           EXISTS(SELECT 1 FROM reviews r WHERE r.segment_id=s.id) OR
+           EXISTS(SELECT 1 FROM notifications n WHERE n.segment_id=s.id) OR
+           EXISTS(SELECT 1 FROM audit_logs a WHERE a.segment_id=s.id AND a.action='preview_started')) has_history,
           v.full_name previewer,w.expires_at lease_expiration FROM segments s
           LEFT JOIN users u ON u.id=s.assigned_to
           LEFT JOIN working_leases w ON w.segment_id=s.id
           LEFT JOIN users v ON v.id=w.user_id ORDER BY s.id DESC LIMIT 80''').fetchall()
+        online_ids={r['user_id'] for r in cx.execute('SELECT DISTINCT user_id FROM sessions WHERE expiry>?',(int(time.time()),))}
         mail_stats=cx.execute("SELECT state,count(*) n FROM mail_outbox GROUP BY state").fetchall()
+    now=int(time.time())
+    sections={'/':'Vue générale','/contribute':'Contribuer','/review':'Réviser',
+        '/admin':'Administration','/account':'Mon compte','/notifications':'Notifications'}
+    people=[{**dict(x), 'online':bool(x['active'] and x['id'] in online_ids and x['last_seen'] and now-int(x['last_seen'])<=300),
+        'last_visit':datetime.fromtimestamp(x['last_seen'],timezone.utc).strftime('%d/%m/%Y %H:%M UTC') if x['last_seen'] else 'Jamais connecté',
+        'last_section':sections.get(x['last_path'],'—')} for x in people]
     return page(req,'admin.html',user=u,stats=stats,people=people,segments=segments,mail_stats={x['state']:x['n'] for x in mail_stats},smtp_ready=smtp_configured(),msg=req.query_params.get('msg',''))
+
+# Curated corpus management (v1.4): all operations require admin + CSRF.
+@app.post('/admin/segments/bulk-approve')
+def admin_bulk_approve(req:Request,csrf:str=Form(...),segment_ids:list[int]=Form(...),
+                       confirmation:str=Form('')):
+    u=require(req,('admin',));err=secure(req,u,csrf)
+    if err:return err
+    ids=list(dict.fromkeys(segment_ids))
+    if confirmation!='VALIDER' or not ids or len(ids)>30 or any(i<=0 for i in ids):
+        return Response('Sélection limitée à 30 segments et confirmation VALIDER obligatoire.',status_code=400)
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        items=[]
+        for sid in ids:
+            item=cx.execute('''SELECT s.id,s.code,s.status,s.archived_at,t.latin,t.french,
+                   t.reported_inaudible,t.contributor_id FROM segments s
+                   JOIN translations t ON t.segment_id=s.id WHERE s.id=?''',(sid,)).fetchone()
+            if not item or item['status']!='submitted' or item['archived_at'] is not None or \
+                    item['reported_inaudible'] or item['contributor_id']==u['id'] or \
+                    not item['latin'].strip() or not item['french'].strip():
+                return Response('La sélection comporte un segment non admissible. Aucune validation effectuée.',status_code=409)
+            items.append(item)
+        for item in items:
+            cx.execute('''INSERT INTO reviews(segment_id,reviewer_id,decision,final_latin,final_french,note)
+                   VALUES(?,?,?,?,?,?)''',(item['id'],u['id'],'approved',item['latin'],item['french'],
+                   'Validation groupée à partir des textes soumis, sans correction'))
+            cx.execute("UPDATE segments SET status='approved',expires_at=NULL WHERE id=?",(item['id'],))
+            record_notification(cx,item['contributor_id'],item['id'],'approved',item['code'],
+                   'Contribution validée dans une opération groupée.')
+            log(cx,u['id'],'admin_bulk_approved',item['id'])
+    return redirect('/admin/segments?status=submitted',msg=f'{len(items)} segment(s) validé(s) et historisé(s).')
+
+@app.get('/admin/segments')
+def admin_segment_library(req:Request, q:str='', status:str='all', page_num:int=1):
+    u=require(req,('admin',))
+    if not u:return redirect('/login')
+    q=q.strip()[:120]
+    if status not in {*STATUS_LABEL.keys(),'archived','all'}:status='all'
+    page_num=max(1,min(page_num,100000))
+    filters=[]; args=[]
+    if status=='archived':filters.append('s.archived_at IS NOT NULL')
+    elif status!='all':filters.append('s.archived_at IS NULL AND s.status=?');args.append(status)
+    if q:
+        filters.append('''(LOWER(s.code) LIKE ? OR LOWER(s.original_name) LIKE ?
+            OR LOWER(s.source_id) LIKE ? OR LOWER(s.speaker_id) LIKE ?
+            OR EXISTS (SELECT 1 FROM translations t WHERE t.segment_id=s.id
+                AND (LOWER(t.latin) LIKE ? OR LOWER(t.french) LIKE ?)))''')
+        args.extend(['%'+q.lower()+'%']*6)
+    where=' WHERE '+(' AND '.join(filters)) if filters else ''
+    with db() as cx:
+        total=cx.execute('SELECT count(*) n FROM segments s'+where,args).fetchone()['n']
+        page_num=min(page_num,max(1,(total+39)//40))
+        records=cx.execute('''SELECT s.id,s.code,s.original_name,s.source_id,s.speaker_id,s.status,
+           s.archived_at,t.latin,t.french,t.reported_inaudible,t.contributor_id,u.full_name contributor FROM segments s
+           LEFT JOIN translations t ON t.segment_id=s.id
+           LEFT JOIN users u ON u.id=t.contributor_id'''+where+
+           ' ORDER BY s.id DESC LIMIT 40 OFFSET ?',args+[40*(page_num-1)]).fetchall()
+    return page(req,'admin_segments.html',user=u,records=records,total=total,q=q,filter_status=status,
+         current_page=page_num,page_count=max(1,(total+39)//40),statuses=STATUS_LABEL,msg=req.query_params.get('msg',''))
+
+@app.get('/admin/segments/{sid}')
+def admin_segment_detail(req:Request,sid:int):
+    u=require(req,('admin',))
+    if not u:return redirect('/login')
+    with db() as cx:
+        seg=cx.execute('''SELECT s.*,t.latin,t.french,t.reported_inaudible,t.submitted_at,
+           t.contributor_id,uc.full_name contributor FROM segments s
+           LEFT JOIN translations t ON t.segment_id=s.id
+           LEFT JOIN users uc ON uc.id=t.contributor_id WHERE s.id=?''',(sid,)).fetchone()
+        if not seg:return page(req,'error.html',user=u,error='Segment introuvable.',status=404)
+        reviews=cx.execute('''SELECT r.*,u.full_name reviewer FROM reviews r JOIN users u ON u.id=r.reviewer_id
+           WHERE r.segment_id=? ORDER BY r.id DESC LIMIT 30''',(sid,)).fetchall()
+        versions=cx.execute('''SELECT * FROM translation_versions WHERE segment_id=? ORDER BY id DESC LIMIT 20''',(sid,)).fetchall()
+        busy=cx.execute('SELECT 1 FROM working_leases WHERE segment_id=?',(sid,)).fetchone() is not None
+        has_history=segment_has_history(cx,sid)
+    approved=next((r for r in reviews if r['decision']=='approved'),None)
+    return page(req,'admin_segment_detail.html',user=u,s=seg,reviews=reviews,versions=versions,
+          latest_approval=approved,busy=busy,has_history=has_history,msg=req.query_params.get('msg',''))
+
+@app.post('/admin/segments/{sid}/metadata')
+def admin_segment_metadata(req:Request,sid:int,csrf:str=Form(...),name:str=Form(...),
+                           speaker_id:str=Form(''),source_id:str=Form('')):
+    u=require(req,('admin',));err=secure(req,u,csrf)
+    if err:return err
+    name=name.strip();speaker_id=speaker_id.strip();source_id=source_id.strip()
+    if not name or len(name)>180 or len(speaker_id)>180 or len(source_id)>180 or '/' in name or '\\' in name:
+        return Response('Métadonnées invalides',status_code=400)
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        old=cx.execute('SELECT original_name,source_id,speaker_id FROM segments WHERE id=?',(sid,)).fetchone()
+        if not old:return Response('Introuvable',status_code=404)
+        cx.execute('UPDATE segments SET original_name=?,speaker_id=?,source_id=? WHERE id=?',
+                   (name,speaker_id,source_id,sid))
+        log(cx,u['id'],'admin_metadata_updated',sid,
+            json.dumps({'old':dict(old),'new':{'name':name,'speaker_id':speaker_id,'source_id':source_id}},ensure_ascii=False))
+    # Underlying S3 object key remains unchanged; renaming is a display/metadata change.
+    return redirect(f'/admin/segments/{sid}',msg='Nom et métadonnées mis à jour ; audio original conservé.')
+
+@app.post('/admin/segments/{sid}/revoke-approval')
+def admin_revoke_approval(req:Request,sid:int,csrf:str=Form(...),note:str=Form(...)):
+    u=require(req,('admin',));err=secure(req,u,csrf)
+    if err:return err
+    note=note.strip()
+    if len(note)<6 or len(note)>3000:return Response('Justification obligatoire (6 à 3000 caractères).',status_code=400)
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        seg=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
+        tr=cx.execute('SELECT * FROM translations WHERE segment_id=?',(sid,)).fetchone()
+        if not seg or seg['archived_at'] is not None or seg['status']!='approved' or not tr:
+            return Response('La validation a déjà changé ou le segment est archivé.',status_code=409)
+        # Keep original approval in review history; add a new, motivated correction decision.
+        cx.execute('''INSERT INTO reviews(segment_id,reviewer_id,decision,final_latin,final_french,note)
+           VALUES(?,?,?,?,?,?)''',(sid,u['id'],'rejected',tr['latin'],tr['french'],note))
+        cx.execute("UPDATE segments SET status='rejected',expires_at=NULL WHERE id=?",(sid,))
+        record_notification(cx,tr['contributor_id'],sid,'rejected',seg['code'],note)
+        log(cx,u['id'],'admin_approval_revoked',sid,note)
+    return redirect(f'/admin/segments/{sid}',msg='Validation retirée. Le segment est exclu des exports validés ; le contributeur peut le corriger.')
+
+@app.post('/admin/segments/{sid}/correct-approval')
+def admin_correct_approval(req:Request,sid:int,csrf:str=Form(...),latin:str=Form(''),
+                           french:str=Form(''),note:str=Form(...)):
+    u=require(req,('admin',));err=secure(req,u,csrf)
+    if err:return err
+    latin=latin.strip();french=french.strip();note=note.strip()
+    if not latin or not french or len(latin)>5000 or len(french)>5000 or len(note)<6 or len(note)>3000:
+        return Response('Deux textes et un motif précis sont obligatoires.',status_code=400)
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        seg=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
+        tr=cx.execute('SELECT * FROM translations WHERE segment_id=?',(sid,)).fetchone()
+        if not seg or seg['archived_at'] is not None or seg['status']!='approved' or not tr:
+            return Response('Correction non autorisée dans cet état.',status_code=409)
+        if tr['contributor_id']==u['id']:
+            return Response('Auto-validation interdite. Demandez à un autre administrateur de vérifier.',status_code=403)
+        cx.execute('''INSERT INTO reviews(segment_id,reviewer_id,decision,final_latin,final_french,note)
+           VALUES(?,?,?,?,?,?)''',(sid,u['id'],'approved',latin,french,note))
+        log(cx,u['id'],'admin_approved_text_corrected',sid,note)
+    return redirect(f'/admin/segments/{sid}',msg='Correction approuvée et historisée dans le corpus exportable.')
 
 @app.post('/admin/leases/{sid}/release')
 def admin_release_lease(req:Request,sid:int,csrf:str=Form(...)):
@@ -630,6 +832,59 @@ def admin_release_lease(req:Request,sid:int,csrf:str=Form(...)):
         cx.execute('DELETE FROM working_leases WHERE segment_id=?',(sid,))
         log(cx,u['id'],'admin_lease_released',sid)
     return redirect('/admin',msg='Consultation temporaire libérée par l’administrateur.')
+
+@app.post('/admin/segments/{sid}/archive')
+def admin_archive_segment(req:Request,sid:int,csrf:str=Form(...)):
+    u=require(req,('admin',)); err=secure(req,u,csrf)
+    if err:return err
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        seg=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
+        if not seg:return page(req,'error.html',user=u,error='Segment introuvable.',status=404)
+        if seg['archived_at'] is not None:return redirect('/admin',msg='Segment déjà archivé.')
+        if cx.execute('SELECT 1 FROM working_leases WHERE segment_id=?',(sid,)).fetchone():
+            return redirect('/admin',msg='Libérez la consultation temporaire avant d’archiver ce segment.')
+        cx.execute("UPDATE segments SET archived_at=datetime('now') WHERE id=?",(sid,))
+        log(cx,u['id'],'segment_archived',sid,seg['code'])
+    return redirect('/admin',msg='Segment archivé. Audio et contributions conservés ; retiré des tâches et exports validés.')
+
+@app.post('/admin/segments/{sid}/restore')
+def admin_restore_segment(req:Request,sid:int,csrf:str=Form(...)):
+    u=require(req,('admin',)); err=secure(req,u,csrf)
+    if err:return err
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        seg=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
+        if not seg:return page(req,'error.html',user=u,error='Segment introuvable.',status=404)
+        if seg['archived_at'] is None:return redirect('/admin',msg='Segment déjà actif.')
+        cx.execute('UPDATE segments SET archived_at=NULL WHERE id=?',(sid,))
+        log(cx,u['id'],'segment_restored',sid,seg['code'])
+    return redirect('/admin',msg='Segment restauré et de nouveau pris en compte.')
+
+@app.post('/admin/segments/{sid}/delete')
+def admin_delete_segment(req:Request,sid:int,csrf:str=Form(...),confirm_code:str=Form(...)):
+    u=require(req,('admin',)); err=secure(req,u,csrf)
+    if err:return err
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        seg=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
+        if not seg:return page(req,'error.html',user=u,error='Segment introuvable.',status=404)
+        if seg['code']!=confirm_code:return page(req,'error.html',user=u,error='Code de confirmation incorrect.',status=400)
+        if seg['status']!='available' or seg['assigned_to'] is not None:
+            return redirect('/admin',msg='Suppression interdite : segment non disponible ou déjà attribué. Archivez-le.')
+        if segment_has_history(cx,sid):
+            return redirect('/admin',msg='Suppression interdite : contribution, brouillon, révision ou consultation existante. Archivez-le.')
+        # Keep transaction uncommitted until deletion of private object succeeds.
+        # A failure in object storage aborts SQL deletion.
+        try:
+            remove_audio_file(AUDIO/seg['file_name'],seg['file_name'])
+        except Exception:
+            return page(req,'error.html',user=u,error='Le stockage audio n’a pas confirmé la suppression. Aucune suppression SQL n’a été validée.',status=503)
+        # Keep audit trail without leaving FK references to the removed row.
+        cx.execute('UPDATE audit_logs SET segment_id=NULL WHERE segment_id=?',(sid,))
+        cx.execute('DELETE FROM segments WHERE id=?',(sid,))
+        log(cx,u['id'],'segment_deleted',details=f"{seg['code']} | {seg['original_name']}")
+    return redirect('/admin',msg='Segment sans annotation supprimé définitivement du stockage et de la base.')
 
 @app.post('/admin/mail/retry')
 def admin_retry_mail(req:Request,background_tasks:BackgroundTasks,csrf:str=Form(...)):
@@ -767,6 +1022,8 @@ def audio_file(req:Request,sid:int):
     with db() as cx:
         s=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
         if not s:return Response('Introuvable',status_code=404)
+        if s['archived_at'] is not None and u['role']!='admin':
+            return Response('Segment archivé',status_code=403)
         allowed=(u['role']=='admin' or
                  (u['role']=='contributor' and ((s['assigned_to']==u['id'] and s['status'] in ('needs_changes','rejected'))
                    or (s['status']=='available' and cx.execute('SELECT 1 FROM working_leases WHERE segment_id=? AND user_id=? AND expires_at>?',(sid,u['id'],int(time.time()))).fetchone() is not None))) or
@@ -797,7 +1054,7 @@ def export_rows(cx):
       FROM segments s JOIN translations t ON t.segment_id=s.id
       JOIN reviews r ON r.id=(SELECT max(r2.id) FROM reviews r2 WHERE r2.segment_id=s.id AND r2.decision='approved')
       JOIN users uc ON uc.id=t.contributor_id JOIN users ur ON ur.id=r.reviewer_id
-      WHERE s.status='approved' ORDER BY s.id''')]
+      WHERE s.archived_at IS NULL AND s.status='approved' ORDER BY s.id''')]
 
 def safe_csv(value):
     val='' if value is None else str(value)

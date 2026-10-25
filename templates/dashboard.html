@@ -1,8 +1,32 @@
 {% extends "base.html" %}{% block title %}Tableau de bord{% endblock %}{% block content %}
+{% if user.role == 'contributor' %}
+<div class="eyebrow">MON ESPACE CONTRIBUTEUR</div>
+<div class="heading-row"><div><h1>Bonjour, {{user.full_name.split()[0]}} ✦</h1>
+<p class="lead">Retrouvez uniquement vos propres contributions, leur statut et vos corrections.</p></div></div>
+<div class="metrics personal-metrics">
+  <div class="metric"><span>Mes contributions soumises</span><strong>{{personal.submitted}}</strong><small>Enregistrements envoyés</small></div>
+  <div class="metric"><span>Mes traductions validées</span><strong>{{personal.approved}}</strong><small>Vérifiées par les réviseurs</small></div>
+  <div class="metric"><span>Mes contributions en révision</span><strong>{{personal.in_review}}</strong><small>En attente de décision</small></div>
+  <div class="metric"><span>Mes corrections à faire</span><strong>{{personal.corrections}}</strong><small>À reprendre depuis Contribuer</small></div>
+</div>
+<div class="columns-2"><section class="card">
+<h2>Mes contributions récentes</h2>
+{% if personal.recent %}<div class="history-list">{% for item in personal.recent %}
+<div><strong>{{item.code}}</strong><span class="tag {{item.status}}">{{status_label[item.status]}}</span>
+{% if item.status in ['rejected','needs_changes'] %}<a href="/contribute?segment={{item.id}}">Corriger →</a>{% endif %}</div>
+{% endfor %}</div>{% else %}<p class="muted">Vous n'avez pas encore soumis de contribution.</p>{% endif %}
+</section><section class="card"><h2>Mon avancement</h2>
+<p class="muted">{{personal.approved}} contribution(s) validée(s) sur {{personal.submitted}} envoyée(s).</p>
+<div class="progress-title"><strong>{{personal.approval_percent}} %</strong></div>
+<div class="progress"><span style="width:{{personal.approval_percent}}%"></span></div>
+<p class="muted">Les contributions inaudibles confirmées : {{personal.inaudible}}.</p>
+<a class="btn primary" href="/contribute">Continuer mes contributions →</a></section></div>
+{% else %}
 <div class="eyebrow">VUE GÉNÉRALE</div><div class="heading-row"><div><h1>Bonjour, {{user.full_name.split()[0]}} <span class="wave">✦</span></h1><p class="lead">Voici l'état d'avancement du corpus ChadVoice.</p></div><span class="top-pill">● Collecte en cours</span></div>
 <div class="metrics"><div class="metric"><div class="metric-icon navy">◉</div><span>Segments enregistrés</span><strong>{{stats.total}}</strong><small>Fichiers audio du corpus</small></div><div class="metric"><div class="metric-icon amber">◷</div><span>À traduire</span><strong>{{stats.available}}</strong><small>Non encore attribués</small></div><div class="metric"><div class="metric-icon blue">⇄</div><span>En révision</span><strong>{{stats.submitted}}</strong><small>Prêts pour contrôle humain</small></div><div class="metric"><div class="metric-icon green">✓</div><span>Traductions validées</span><strong>{{stats.approved}}</strong><small>Exploitables dans le corpus</small></div></div>
 <div class="columns-2"><section class="card"><div class="section-head"><div><h2>Progression du projet</h2><p>Avancement des annotations approuvées</p></div></div><div class="progress-title"><strong>{{stats.approved}} / {{stats.total}}</strong><span>{% if stats.total %}{{ (stats.approved / stats.total * 100)|round(1) }}%{% else %}0%{% endif %}</span></div><div class="progress"><span style="width:{% if stats.total %}{{stats.approved / stats.total * 100}}{% else %}0{% endif %}%"></span></div><div class="legend"><div><span class="legend-dot green"></span> Validés : {{stats.approved}}</div><div><span class="legend-dot blue"></span> À revoir : {{stats.submitted}}</div><div><span class="legend-dot amber"></span> À corriger/rejetés : {{stats.needs_changes + stats.rejected}}</div></div></section>
 <section class="card"><h2>Votre espace</h2><p class="muted">Rôle actuel : <strong>{{ {'admin':'administrateur','reviewer':'réviseur agréé','contributor':'contributeur'}[user.role] }}</strong></p><div class="personal-number">{% if user.role=='reviewer' %}{{my_reviews}}{% else %}{{mine}}{% endif %}<span>{% if user.role=='reviewer' %}décisions de révision{% else %}segments soumis{% endif %}</span></div>
 {% if user.role in ['contributor','admin'] %}<a class="btn primary" href="/contribute">Commencer une contribution →</a>{% endif %}{% if user.role=='reviewer' %}<a class="btn primary" href="/review">Ouvrir la file de révision →</a>{% endif %}</section></div>
 <div class="tip"><div>✧</div><p><strong>Qualité scientifique d'abord.</strong> Les traductions sont vérifiées par un réviseur avant leur export. Les versions originales restent conservées pour assurer la traçabilité.</p></div>
+{% endif %}
 {% endblock %}

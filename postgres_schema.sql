@@ -4,6 +4,11 @@ CREATE TABLE IF NOT EXISTS users (
  pw_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','reviewer','contributor')),
  active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT to_char(now() at time zone 'UTC','YYYY-MM-DD HH24:MI:SS')
 );
+CREATE TABLE IF NOT EXISTS user_presence (
+ user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ last_seen BIGINT NOT NULL DEFAULT 0,
+ last_path TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS sessions (
  token_hash TEXT PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  csrf TEXT NOT NULL, expiry BIGINT NOT NULL
@@ -13,7 +18,7 @@ CREATE TABLE IF NOT EXISTS segments (
  file_name TEXT NOT NULL UNIQUE, mime TEXT NOT NULL, bytes BIGINT NOT NULL,
  duration_seconds DOUBLE PRECISION, speaker_id TEXT NOT NULL DEFAULT '', source_id TEXT NOT NULL DEFAULT '',
  status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','assigned','draft','submitted','needs_changes','approved','rejected','inaudible')),
- assigned_to BIGINT REFERENCES users(id), expires_at BIGINT,
+ assigned_to BIGINT REFERENCES users(id), expires_at BIGINT, archived_at TEXT,
  created_at TEXT NOT NULL DEFAULT to_char(now() at time zone 'UTC','YYYY-MM-DD HH24:MI:SS')
 );
 CREATE TABLE IF NOT EXISTS translations (

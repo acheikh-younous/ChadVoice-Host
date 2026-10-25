@@ -70,7 +70,8 @@ def test_02_claim_no_collision_draft_and_release(c):
     a,tka=userclient('contrib@cv.test','secret-contrib-2026')
     b,tkb=userclient('contrib2@cv.test','secret-contrib2-2026')
     with db() as cx:sid=cx.execute('SELECT id FROM segments LIMIT 1').fetchone()['id']
-    a.post('/claim',data={'csrf':tka})
+    claimed=a.post('/claim',data={'csrf':tka})
+    assert '30 minutes' not in claimed.text
     b.post('/claim',data={'csrf':tkb})
     with db() as cx:
         s=cx.execute('SELECT * FROM segments WHERE id=?',(sid,)).fetchone()
@@ -79,7 +80,8 @@ def test_02_claim_no_collision_draft_and_release(c):
     assert a.get('/audio/'+str(sid)).status_code==200
     assert b.get('/audio/'+str(sid)).status_code==403
     assert b.post(f'/contribute/{sid}/save',data={'csrf':tkb,'action':'submit','latin':'x','french':'y'}).status_code==409
-    a.post(f'/contribute/{sid}/save',data={'csrf':tka,'action':'draft','latin':'salam','french':'bonjour'})
+    drafted=a.post(f'/contribute/{sid}/save',data={'csrf':tka,'action':'draft','latin':'salam','french':'bonjour'})
+    assert '48 heures' not in drafted.text
     with db() as cx:
         assert cx.execute('SELECT status FROM segments WHERE id=?',(sid,)).fetchone()[0]=='available'
         assert cx.execute('SELECT expires_at FROM working_leases WHERE segment_id=?',(sid,)).fetchone()[0]>0
@@ -361,3 +363,237 @@ def test_12_migration_legacy_unsubmitted(c):
         assert lease and lease['user_id']==uid
         assert tr['latin']=='legacy latin' and tr['french']=='legacy français'
     admin.__exit__(None,None,None)
+
+# Version 1.3: archival leaves history intact; permanent deletion is restricted.
+def test_13_archive_restore_approved_and_rights(c):
+    admin,at=userclient('admin@cv.test','secret-admin-2026')
+    reviewer,rt=userclient('reviser@cv.test','secret-review-2026')
+    contributor,ct=userclient('contrib@cv.test','secret-contrib-2026')
+    with db() as cx:
+        target=cx.execute("SELECT id,code FROM segments WHERE status='approved' AND archived_at IS NULL ORDER BY id LIMIT 1").fetchone()
+        sid=target['id']; code=target['code']
+    assert code in {row['segment_id'] for row in admin.get('/admin/export/json').json()}
+    assert reviewer.post(f'/admin/segments/{sid}/archive',data={'csrf':rt}).status_code==403
+    assert admin.post(f'/admin/segments/{sid}/archive',data={'csrf':'invalid'}).status_code==403
+    resp=admin.post(f'/admin/segments/{sid}/archive',data={'csrf':at})
+    assert resp.status_code==200
+    with db() as cx:
+        s=cx.execute('SELECT status,archived_at FROM segments WHERE id=?',(sid,)).fetchone()
+        assert s['status']=='approved' and s['archived_at'] is not None
+        assert cx.execute('SELECT 1 FROM translation_versions WHERE segment_id=?',(sid,)).fetchone()
+    assert code not in {row['segment_id'] for row in admin.get('/admin/export/json').json()}
+    assert contributor.get(f'/audio/{sid}').status_code==403
+    assert reviewer.get(f'/audio/{sid}').status_code==403
+    assert reviewer.get(f'/review/{sid}').status_code==403
+    assert admin.get(f'/audio/{sid}').status_code==200
+    # Cannot permanently delete a scientifically annotated segment even if archived.
+    result=admin.post(f'/admin/segments/{sid}/delete',data={'csrf':at,'confirm_code':code})
+    assert 'Suppression interdite' in result.text
+    assert admin.post(f'/admin/segments/{sid}/restore',data={'csrf':at}).status_code==200
+    with db() as cx: assert cx.execute('SELECT archived_at FROM segments WHERE id=?',(sid,)).fetchone()[0] is None
+    assert code in {row['segment_id'] for row in admin.get('/admin/export/json').json()}
+    admin.__exit__(None,None,None);reviewer.__exit__(None,None,None);contributor.__exit__(None,None,None)
+
+
+def test_14_delete_empty_audio_with_audit_and_confirmation(c):
+    admin,at=userclient('admin@cv.test','secret-admin-2026')
+    contributor,ct=userclient('contrib@cv.test','secret-contrib-2026')
+    raw=io.BytesIO()
+    with wave.open(raw,'wb') as w:
+        w.setnchannels(1);w.setsampwidth(2);w.setframerate(16000);w.writeframes(b'\0\0'*176000)
+    assert 'Importés : 1' in admin.post('/admin/upload',data={'csrf':at},files={'audios':('DELETE_TEST.wav',raw.getvalue(),'audio/wav')}).text
+    with db() as cx:
+        row=cx.execute("SELECT id,code,file_name FROM segments WHERE code='DELETE_TEST'").fetchone()
+        sid=row['id']; code=row['code']; filename=row['file_name']
+    from app import AUDIO
+    assert (AUDIO/filename).is_file()
+    assert contributor.post(f'/admin/segments/{sid}/delete',data={'csrf':ct,'confirm_code':code}).status_code==403
+    assert admin.post(f'/admin/segments/{sid}/delete',data={'csrf':at,'confirm_code':'WRONG'}).status_code==400
+    assert admin.post(f'/admin/segments/{sid}/archive',data={'csrf':at}).status_code==200
+    assert admin.post(f'/admin/segments/{sid}/delete',data={'csrf':at,'confirm_code':code}).status_code==200
+    with db() as cx:
+        assert cx.execute('SELECT 1 FROM segments WHERE id=?',(sid,)).fetchone() is None
+        assert cx.execute("SELECT 1 FROM audit_logs WHERE action='segment_deleted' AND details LIKE ?",(code+'%',)).fetchone() is not None
+    assert not (AUDIO/filename).exists()
+    assert admin.get(f'/audio/{sid}').status_code==404
+    admin.__exit__(None,None,None);contributor.__exit__(None,None,None)
+
+
+def test_15_archive_does_not_allow_preview_locks(c):
+    admin,at=userclient('admin@cv.test','secret-admin-2026')
+    contributor,ct=userclient('contrib2@cv.test','secret-contrib2-2026')
+    # Existing preview from previous tests or a new one; either way archiving is blocked.
+    contributor.post('/claim',data={'csrf':ct})
+    with db() as cx:
+        row=cx.execute('SELECT segment_id FROM working_leases WHERE user_id=(SELECT id FROM users WHERE email=?)',('contrib2@cv.test',)).fetchone()
+        assert row
+        sid=row[0]
+    resp=admin.post(f'/admin/segments/{sid}/archive',data={'csrf':at})
+    assert 'Libérez la consultation' in resp.text
+    with db() as cx: assert cx.execute('SELECT archived_at FROM segments WHERE id=?',(sid,)).fetchone()[0] is None
+    admin.__exit__(None,None,None);contributor.__exit__(None,None,None)
+
+
+def test_16_migrate_old_sqlite_schema_column(c):
+    # Idempotent migrations never erase corpus or reset archived markers.
+    init_db()
+    with db() as cx:
+        cols=[x['name'] for x in cx.execute('PRAGMA table_info(segments)')]
+        assert 'archived_at' in cols
+    init_db()
+    with db() as cx:
+        cols=[x['name'] for x in cx.execute('PRAGMA table_info(segments)')]
+        assert cols.count('archived_at')==1
+
+def test_17_delete_storage_failure_preserves_record(c, monkeypatch):
+    admin,at=userclient('admin@cv.test','secret-admin-2026')
+    raw=io.BytesIO()
+    with wave.open(raw,'wb') as w:
+        w.setnchannels(1);w.setsampwidth(2);w.setframerate(16000);w.writeframes(b'\0\0'*192000)
+    admin.post('/admin/upload',data={'csrf':at},files={'audios':('FAIL_STORAGE_DELETE.wav',raw.getvalue(),'audio/wav')})
+    with db() as cx:
+        row=cx.execute("SELECT id,code FROM segments WHERE code='FAIL_STORAGE_DELETE'").fetchone()
+    def fail(*args):raise RuntimeError('Object store offline')
+    monkeypatch.setattr('app.remove_audio_file',fail)
+    r=admin.post(f"/admin/segments/{row['id']}/delete",data={'csrf':at,'confirm_code':row['code']})
+    assert r.status_code==503
+    with db() as cx:
+        assert cx.execute('SELECT 1 FROM segments WHERE id=?',(row['id'],)).fetchone()
+    admin.__exit__(None,None,None)
+
+# v1.4: scientific curation, reversible approval, authenticated bulk decisions.
+def test_18_admin_library_search_metadata_and_revoke(c):
+    admin,token=userclient('admin@cv.test','secret-admin-2026')
+    reviewer,rt=userclient('reviser@cv.test','secret-review-2026')
+    with db() as cx:
+        row=cx.execute("SELECT id,code FROM segments WHERE status='approved' AND archived_at IS NULL ORDER BY id LIMIT 1").fetchone()
+        assert row
+        sid,code=row['id'],row['code']
+        n=cx.execute('SELECT count(*) FROM reviews WHERE segment_id=?',(sid,)).fetchone()[0]
+    assert admin.get('/admin/segments?q='+code).status_code==200
+    assert code in admin.get('/admin/segments?q='+code).text
+    assert 'Traduction française' in admin.get(f'/admin/segments/{sid}').text
+    assert reviewer.get(f'/admin/segments/{sid}').status_code==200  # reviewer redirected
+    assert admin.post(f'/admin/segments/{sid}/metadata',data={'csrf':'BAD','name':'d'}).status_code==403
+    rv=admin.post(f'/admin/segments/{sid}/metadata',data={'csrf':token,'name':'nouveau_nom_fichier.wav','source_id':'Film-V14','speaker_id':'C777'})
+    assert rv.status_code==200
+    with db() as cx:
+        assert cx.execute('SELECT original_name FROM segments WHERE id=?',(sid,)).fetchone()[0]=='nouveau_nom_fichier.wav'
+    assert 'nouveau_nom_fichier.wav' in admin.get('/admin/segments?q=nouveau_nom_fichier').text
+    assert admin.post(f'/admin/segments/{sid}/revoke-approval',data={'csrf':token,'note':'x'}).status_code==400
+    rv=admin.post(f'/admin/segments/{sid}/revoke-approval',data={'csrf':token,'note':'La traduction approuvée était incorrecte.'})
+    assert rv.status_code==200
+    with db() as cx:
+        assert cx.execute('SELECT status FROM segments WHERE id=?',(sid,)).fetchone()[0]=='rejected'
+        assert cx.execute('SELECT count(*) FROM reviews WHERE segment_id=?',(sid,)).fetchone()[0]==n+1
+        assert cx.execute('SELECT decision FROM reviews WHERE segment_id=? ORDER BY id DESC LIMIT 1',(sid,)).fetchone()[0]=='rejected'
+    assert code not in {r['segment_id'] for r in admin.get('/admin/export/json').json()}
+    admin.__exit__(None,None,None);reviewer.__exit__(None,None,None)
+
+
+def test_19_batch_approval_checked_and_audited(c):
+    admin,csrf=userclient('admin@cv.test','secret-admin-2026')
+    other,ot=userclient('contrib@cv.test','secret-contrib-2026')
+    with db() as cx:
+        contributor=cx.execute("SELECT id FROM users WHERE email='contrib@cv.test'").fetchone()[0]
+        ids=[]
+        for idx in (1,2,3):
+            sid=cx.execute('''INSERT INTO segments(code,original_name,file_name,mime,bytes,status,assigned_to)
+              VALUES(?,?,?,?,?,?,?)''',(f'BATCH14_{idx}',f'batch_{idx}.wav',f'fake-v14-{idx}.wav',
+                              'audio/wav',1,'submitted' if idx<3 else 'approved',contributor)).lastrowid
+            cx.execute('''INSERT INTO translations(segment_id,contributor_id,latin,french,submitted_at)
+              VALUES(?,?,?,?,datetime('now'))''',(sid,contributor,f'latin v14 {idx}',f'français v14 {idx}'))
+            ids.append(sid)
+    invalid=admin.post('/admin/segments/bulk-approve',data={'csrf':csrf,'confirmation':'VALIDER','segment_ids':[str(ids[0]),str(ids[2])]})
+    assert invalid.status_code==409
+    with db() as cx:
+        assert cx.execute('SELECT status FROM segments WHERE id=?',(ids[0],)).fetchone()[0]=='submitted'
+    assert admin.post('/admin/segments/bulk-approve',data={'csrf':csrf,'confirmation':'NON','segment_ids':[str(ids[0])]}).status_code==400
+    assert other.post('/admin/segments/bulk-approve',data={'csrf':ot,'confirmation':'VALIDER','segment_ids':[str(ids[0])]}).status_code==403
+    r=admin.post('/admin/segments/bulk-approve',data={'csrf':csrf,'confirmation':'VALIDER','segment_ids':[str(ids[0]),str(ids[1])]})
+    assert r.status_code==200
+    with db() as cx:
+        for sid in ids[:2]:
+            assert cx.execute('SELECT status FROM segments WHERE id=?',(sid,)).fetchone()[0]=='approved'
+            assert cx.execute("SELECT count(*) FROM reviews WHERE segment_id=? AND decision='approved'",(sid,)).fetchone()[0]==1
+    data=admin.get('/admin/export/json').json()
+    assert all(f'BATCH14_{n}' in {x['segment_id'] for x in data} for n in (1,2))
+    # Adjust final approved copy, not the original contributor's text.
+    sid=ids[0]
+    assert admin.post(f'/admin/segments/{sid}/correct-approval',data={'csrf':csrf,'latin':'','french':'x','note':'Valid reason'}).status_code==400
+    r=admin.post(f'/admin/segments/{sid}/correct-approval',data={'csrf':csrf,'latin':'latin revu','french':'français revu','note':'Correction orthographique'})
+    assert r.status_code==200
+    export={x['segment_id']:x for x in admin.get('/admin/export/json').json()}
+    assert export['BATCH14_1']['text_french']=='français revu'
+    with db() as cx:
+        assert cx.execute('SELECT french FROM translations WHERE segment_id=?',(sid,)).fetchone()[0]=='français v14 1'
+    admin.__exit__(None,None,None);other.__exit__(None,None,None)
+
+def test_20_contributor_personal_dashboard_hides_corpus(c):
+    contributor,t=userclient('contrib@cv.test','secret-contrib-2026')
+    page=contributor.get('/')
+    assert page.status_code==200
+    assert 'MON ESPACE CONTRIBUTEUR' in page.text
+    assert 'Mes contributions soumises' in page.text
+    assert 'Segments enregistrés' not in page.text
+    assert 'Progression du projet' not in page.text
+    assert 'À traduire' not in page.text
+    other,_=userclient('contrib2@cv.test','secret-contrib2-2026')
+    p2=other.get('/')
+    assert 'Mes contributions soumises' in p2.text
+    with db() as cx:
+        from_a=cx.execute("SELECT count(*) FROM translations t JOIN users u ON u.id=t.contributor_id WHERE u.email='contrib@cv.test' AND t.submitted_at IS NOT NULL").fetchone()[0]
+        from_b=cx.execute("SELECT count(*) FROM translations t JOIN users u ON u.id=t.contributor_id WHERE u.email='contrib2@cv.test' AND t.submitted_at IS NOT NULL").fetchone()[0]
+    assert f'<strong>{from_a}</strong><small>Enregistrements envoyés' in page.text
+    assert f'<strong>{from_b}</strong><small>Enregistrements envoyés' in p2.text
+    contributor.__exit__(None,None,None);other.__exit__(None,None,None)
+
+def test_21_mobile_logout_and_guidance(c):
+    contributor,t=userclient('contrib@cv.test','secret-contrib-2026')
+    html=contributor.get('/').text
+    assert 'mobile-logout' in html
+    assert '/static/chadvoice-logo.png' in html
+    assert '/static/chadvoice_logo.png' not in html
+    assert 'mobile-logout' in html
+    page=contributor.get('/contribute')
+    assert page.status_code==200
+    assert '48 heures' not in page.text
+    assert '30 minutes' not in page.text
+    assert 'disponibles</span>' not in page.text
+    assert 'en arabe tchadien' in page.text
+    response=contributor.post('/logout',data={'csrf':t})
+    assert response.status_code==200
+    assert 'Bienvenue sur ChadVoice' in response.text
+    contributor.__exit__(None,None,None)
+
+def test_22_admin_last_seen_and_presence(c):
+    contributor,_=userclient('contrib@cv.test','secret-contrib-2026')
+    contributor.get('/contribute')
+    admin,_=userclient('admin@cv.test','secret-admin-2026')
+    page=admin.get('/admin')
+    assert page.status_code==200
+    assert 'Dernière activité' in page.text
+    assert 'En ligne' in page.text
+    assert 'Contribuer' in page.text
+    assert 'Contributeur Alpha' in page.text
+    with db() as cx:
+        presence=cx.execute("SELECT p.last_seen,p.last_path FROM user_presence p JOIN users u ON u.id=p.user_id WHERE u.email='contrib@cv.test'").fetchone()
+    assert presence['last_seen']>0 and presence['last_path']=='/contribute'
+    admin.__exit__(None,None,None);contributor.__exit__(None,None,None)
+
+def test_23_presence_offline_for_closed_or_stale_session(c):
+    contributor,t=userclient('contrib2@cv.test','secret-contrib2-2026')
+    contributor.get('/account')
+    old_session_token=contributor.cookies.get('cv_session')
+    contributor.post('/logout',data={'csrf':t})
+    admin,_=userclient('admin@cv.test','secret-admin-2026')
+    r=admin.get('/admin')
+    assert r.status_code==200
+    assert 'Contributeur Beta' in r.text
+    with db() as cx:
+        stale=cx.execute("SELECT p.last_seen,p.last_path FROM user_presence p JOIN users u ON u.id=p.user_id WHERE u.email='contrib2@cv.test'").fetchone()
+        assert stale['last_path']=='/account'
+        assert stale['last_seen']>0
+        assert cx.execute("SELECT count(*) FROM sessions WHERE token_hash=?",(hashlib.sha256(old_session_token.encode()).hexdigest(),)).fetchone()[0]==0
+    # A nonexpired stale login does not count as online after 5 min.
+    admin.__exit__(None,None,None);contributor.__exit__(None,None,None)

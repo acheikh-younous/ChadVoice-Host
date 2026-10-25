@@ -74,3 +74,4 @@ def init_postgres():
         for statement in sql.split(';'):
             statement=statement.strip()
             if statement: conn.execute(statement)
+        conn.execute('ALTER TABLE segments ADD COLUMN IF NOT EXISTS archived_at TEXT')

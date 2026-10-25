@@ -35,3 +35,16 @@
 
 .mobile-top .mini-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:800px){.login-logo{width:72px;height:72px}}
+
+/* ChadVoice v1.5 : application mobile et tableau de bord personnel */
+.brand-logo-mobile{width:32px;height:32px;max-width:32px;max-height:32px;object-fit:contain;flex-shrink:0;border-radius:6px}
+.mobile-top .mini-label{max-width:85px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mobile-logout{margin-left:5px}
+.mobile-logout button{background:#f0f7f6;color:#075b56;border:1px solid #c5e6df;padding:7px 9px;border-radius:7px;font-size:.74rem;font-weight:700;white-space:nowrap}
+.personal-metrics .metric{min-height:135px}
+.history-list>div{flex-wrap:wrap}
+.history-list>div>strong{min-width:0;overflow-wrap:anywhere;flex:1 1 12ch}
+.status-online,.status-offline{font-size:.74rem;font-weight:700;white-space:nowrap}
+.status-online{color:#067c56}.status-offline{color:#718090}
+@media(max-width:800px){.mobile-top{display:flex;gap:8px;align-items:center}.mobile-top .brand-logo-mobile{display:block!important}.mobile-top .mobile-logout{display:block!important}}
+@media(max-width:420px){.mobile-top{padding:10px}.mobile-top .mini-label{display:none}.mobile-logout button{padding:7px 8px}}
