@@ -660,7 +660,7 @@ def test_27_audio_code_and_user_admin_csv_regression(c):
         assert member.get('/admin/users/export.csv').status_code==403
         response=admin.get('/admin/users/export.csv')
         assert response.status_code==200
-        assert response.content.startswith(b'\x5c\x5cxef\x5c\x5cbb\x5c\x5cbf')
+        assert response.content.startswith(bytes((239,187,191)))
         rows=list(csv.DictReader(io.StringIO(response.content.decode('utf-8-sig')),delimiter=';'))
         assert rows and any(x['email']=='contrib@cv.test' for x in rows)
         assert set(rows[0])=={'id','nom_complet','email','role','statut','contributions','revisions','changement_mot_de_passe_requis'}
