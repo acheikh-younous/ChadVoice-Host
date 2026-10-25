@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}Bibliothèque des segments{% endblock %}{% block content %}
 <div class="eyebrow">ADMINISTRATION DU CORPUS</div><h1>Gestion des audios</h1>
 <p class="lead">Rechercher dans tous les enregistrements, retrouver les traductions, gérer les validations et les métadonnées.</p>
-<div class="card"><form method="get" action="/admin/segments" class="form-stack">
+<div class="card"><p class="muted">Codes non conformes : {{invalid_code_count}} · Convention : CV suivi de 4 à 8 chiffres.</p><form method="get" action="/admin/segments" class="form-stack">
 <label>Recherche (code, nom, source, locuteur, textes, contributeur)<input name="q" maxlength="120" value="{{q}}" placeholder="CV001, nom du contributeur, traduction..."></label><div class="twocol">
 <label>État<select name="status"><option value="all" {% if filter_status=='all' %}selected{% endif %}>Tous les audios</option>
 <option value="archived" {% if filter_status=='archived' %}selected{% endif %}>Archivés</option><option value="not_approved" {% if filter_status=='not_approved' %}selected{% endif %}>Non validés (actifs)</option><option value="attention" {% if filter_status=='attention' %}selected{% endif %}>En révision ou correction</option>
@@ -11,7 +11,7 @@
 <input type="hidden" name="csrf" value="{{user.csrf}}">
 <div class="card after-card"><div class="table-scroll"><table><thead><tr><th>Lot</th><th>Segment</th><th>Nom</th><th>Statut</th><th>Contribution</th><th>Action</th></tr></thead>
 <tbody>{% for s in records %}<tr><td>{% if s.status=='submitted' and not s.archived_at and s.latin and s.french and not s.reported_inaudible and s.contributor_id!=user.id %}<input type="checkbox" name="segment_ids" value="{{s.id}}">{% else %}—{% endif %}</td>
-<td><strong>{{s.code}}</strong></td><td>{{s.original_name}}</td><td>{{'Archivé' if s.archived_at else statuses[s.status]}}</td>
+<td><strong>{{s.code}}</strong>{% if s.invalid_code %}<small class="small-block">Code non conforme</small>{% endif %}</td><td>{{s.original_name}}</td><td>{{'Archivé' if s.archived_at else statuses[s.status]}}</td>
 <td><small>{{s.contributor or '—'}}</small></td><td><a href="/admin/segments/{{s.id}}" class="btn secondary">Examiner / Gérer</a></td></tr>{% endfor %}</tbody></table></div>
 {% if not records %}<p>Aucun segment trouvé.</p>{% endif %}
 <div class="form-stack"><p class="muted">Validation groupée : 30 au maximum ; uniquement les contributions soumises, complètes et non inaudibles. Aucune correction du texte n'est effectuée. Vérifiez chaque sélection.</p>

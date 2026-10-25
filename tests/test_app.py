@@ -641,3 +641,39 @@ def test_25_unicode_search_for_accented_contributor(c):
         with db() as cx:
             cx.execute('UPDATE users SET full_name=? WHERE id=?',(old_name,contributor_id))
         admin.__exit__(None,None,None)
+
+
+def test_27_audio_code_and_user_admin_csv_regression(c):
+    import csv,io,re
+    admin,csrf=userclient('admin@cv.test','secret-admin-2026')
+    member,_=userclient('contrib@cv.test','secret-contrib-2026')
+    try:
+        with db() as cx:
+            sid=cx.execute('SELECT id FROM segments ORDER BY id LIMIT 1').fetchone()['id']
+            previous_code=cx.execute('SELECT code FROM segments WHERE id=?',(sid,)).fetchone()['code']
+        resp=admin.post(f'/admin/segments/{sid}/code',data={'csrf':csrf,'new_code':'CV88887777'})
+        assert resp.status_code==200
+        assert 'CV88887777' in admin.get(f'/admin/segments/{sid}').text
+        assert admin.post(f'/admin/segments/{sid}/code',data={'csrf':csrf,'new_code':'ABC'}).status_code==400
+        assert member.post(f'/admin/segments/{sid}/code',data={'csrf':'invalid','new_code':'CV11112222'}).status_code in (302,303,403)
+        assert admin.get('/admin/users').status_code==200
+        assert member.get('/admin/users/export.csv').status_code==403
+        response=admin.get('/admin/users/export.csv')
+        assert response.status_code==200
+        assert response.content.startswith(bytes((239,187,191)))
+        rows=list(csv.DictReader(io.StringIO(response.content.decode('utf-8-sig')),delimiter=';'))
+        assert rows and any(x['email']=='contrib@cv.test' for x in rows)
+        assert set(rows[0])=={'id','nom_complet','email','role','statut','contributions','revisions','changement_mot_de_passe_requis'}
+        assert 'pw_hash' not in response.text and 'password' not in response.text
+        assert 'no-store' in response.headers['cache-control']
+        created=admin.post('/admin/users',data={'csrf':csrf,'email':'new_csv_user@example.org','full_name':'Usager Export','role':'contributor'})
+        assert created.status_code==200
+        match=re.search(r'<p style="[^"]+">(\d{10})</p>',created.text)
+        assert match
+        new_user,token=userclient('new_csv_user@example.org',match.group(1))
+        assert 'Veuillez définir votre mot de passe personnel' in new_user.get('/').text
+        new_user.__exit__(None,None,None)
+    finally:
+        with db() as cx:
+            cx.execute('UPDATE segments SET code=? WHERE id=?',(previous_code,sid))
+        admin.__exit__(None,None,None);member.__exit__(None,None,None)

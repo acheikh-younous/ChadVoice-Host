@@ -7,7 +7,7 @@
   <nav><a href="/" class="nav{% if request.url.path=='/' %} active{% endif %}"><span>▦</span> Vue générale</a>
   {% if user.role in ['contributor','admin'] %}<a href="/contribute" class="nav{% if request.url.path.startswith('/contribute') %} active{% endif %}"><span>◉</span> Contribuer</a>{% endif %}
   {% if user.role in ['reviewer','admin'] %}<a href="/review" class="nav{% if request.url.path.startswith('/review') %} active{% endif %}"><span>✓</span> Réviser</a>{% endif %}
-  {% if user.role=='admin' %}<a href="/admin" class="nav{% if request.url.path=='/admin' %} active{% endif %}"><span>⚙</span> Administration</a>
+  {% if user.role=='admin' %}<a href="/admin/users" class="nav{% if request.url.path.startswith('/admin/users') %} active{% endif %}"><span>♙</span> Gestion des utilisateurs</a><a href="/admin" class="nav{% if request.url.path=='/admin' %} active{% endif %}"><span>⚙</span> Administration</a>
   <a href="/admin/segments" class="nav{% if request.url.path.startswith('/admin/segments') %} active{% endif %}"><span>♫</span> Gestion des audios</a>{% endif %}
   <a href="/notifications" class="nav{% if request.url.path=='/notifications' %} active{% endif %}"><span>✉</span> Notifications {% if unread %}<strong class="unread-badge">{{unread}}</strong>{% endif %}</a>
   <a href="/account" class="nav{% if request.url.path=='/account' %} active{% endif %}"><span>♙</span> Mon compte</a>
