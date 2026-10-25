@@ -25,6 +25,14 @@ def branding_site(tmp_path_factory):
         (pages / f'{name}.html').write_text(template.render(
             user=user, request=SimpleNamespace(url=SimpleNamespace(path='/')),
             msg=None, unread=0), encoding='utf-8')
+    user = SimpleNamespace(role='contributor', full_name='Utilisateur ' * 30,
+                           csrf='test-only', id=1)
+    personal = dict(submitted=2, approved=1, in_review=0, corrections=1,
+                    inaudible=0, approval_percent=50,
+                    recent=[dict(id=1, code='SYNTHETIC_' * 12, status='needs_changes')])
+    (pages / 'personal.html').write_text(templates.get_template('dashboard.html').render(
+        user=user, personal=personal, status_label={'needs_changes':'À corriger'},
+        request=SimpleNamespace(url=SimpleNamespace(path='/')), msg=None, unread=0), encoding='utf-8')
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(
         SimpleHTTPRequestHandler, directory=str(pages)))
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -58,5 +66,27 @@ def test_responsive_logo(branding_site, width, view):
                 hidden = '.brand-logo' if width <= 800 else '.brand-logo-mobile'
                 assert not page.locator(hidden).is_visible()
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize('width', [320, 375, 390, 768, 800, 801, 1440])
+def test_personal_dashboard_mobile_navigation(branding_site, width):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=os.getenv('CHADVOICE_TEST_BROWSER'))
+        try:
+            page = browser.new_page(viewport={'width':width,'height':900})
+            page.goto(f'{branding_site}/personal.html')
+            assert page.get_by_text('Mes contributions soumises').is_visible()
+            assert page.get_by_text('Corriger →', exact=True).is_visible()
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            logout = page.locator('.mobile-logout')
+            assert logout.is_visible() == (width <= 800)
+            if width <= 800:
+                assert logout.get_attribute('method') == 'post'
+                assert logout.get_attribute('action') == '/logout'
+                assert logout.locator('input[name=csrf]').input_value() == 'test-only'
+                box = logout.bounding_box()
+                assert box['x'] >= 0 and box['x'] + box['width'] <= width
         finally:
             browser.close()
