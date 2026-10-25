@@ -614,7 +614,7 @@ def test_24_admin_audio_library_search_filters_and_permissions(c):
         total=cx.execute('SELECT count(*) FROM translations WHERE contributor_id=?',(cid,)).fetchone()[0]
     by_contrib=admin.get(f'/admin/segments?contributor={cid}')
     assert by_contrib.status_code==200
-    assert f'{total} résultat(s)' in by_contrib.text
+    assert f'{total} segment(s)' in by_contrib.text
     assert f'value="{cid}" selected' in by_contrib.text
     assert admin.get('/admin/segments?status=not_approved').status_code==200
     assert admin.get('/admin/segments?status=attention').status_code==200
