@@ -2,6 +2,7 @@
 <a class="back" href="/admin/segments">← Bibliothèque des audios</a>
 <div class="eyebrow">GESTION DU CORPUS</div><h1>{{s.code}} — {{s.original_name}}</h1>
 <p>État : <strong>{{'Archivé' if s.archived_at else status_label[s.status]}}</strong> · Source : {{s.source_id or '—'}} · Locuteur : {{s.speaker_id or '—'}}</p>
+<section class="card"><h2>Identifiant du segment</h2><p>Identifiant visible : <strong>{{s.code}}</strong>{% if invalid_code %} · Code non conforme{% endif %}</p><p class="muted">Format accepté : CV et 4 à 8 chiffres. L'identifiant interne et le fichier audio restent inchangés.</p><form method="post" action="/admin/segments/{{s.id}}/code" class="form-stack"><input type="hidden" name="csrf" value="{{user.csrf}}"><label>Nouveau code<input name="new_code" value="{{s.code}}" pattern="CV[0-9]{4,8}" maxlength="10" required></label><button class="btn secondary">Mettre à jour l'identifiant</button></form></section>
 <div class="columns-2"><section class="card"><h2>Écouter le segment</h2><audio controls preload="none" src="/audio/{{s.id}}" style="width:100%"></audio>
 <p class="muted">Nom affiché modifiable ; fichier original conservé dans le stockage privé.</p>
 <h2>Renommer / modifier les métadonnées</h2><form method="post" action="/admin/segments/{{s.id}}/metadata" class="form-stack">
