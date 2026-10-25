@@ -67,3 +67,5 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS ix_segment_status ON segments(status,id);
 CREATE INDEX IF NOT EXISTS ix_reviewer_seg ON reviews(segment_id,id);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password INTEGER NOT NULL DEFAULT 0;
