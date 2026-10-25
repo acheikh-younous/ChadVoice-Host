@@ -971,24 +971,111 @@ def admin_retry_mail(req:Request,background_tasks:BackgroundTasks,csrf:str=Form(
     for id in ids:background_tasks.add_task(send_mail,id)
     return redirect('/admin',msg=f'{len(ids)} message(s) programmés pour une nouvelle tentative.')
 
+@app.get('/admin/users')
+def admin_user_library(req:Request):
+    u=require(req,('admin',))
+    if not u:return redirect('/login')
+    with db() as cx:
+        people=cx.execute('''SELECT u.id,u.full_name,u.email,u.role,u.active,u.must_change_password,
+          (SELECT count(*) FROM translations t WHERE t.contributor_id=u.id AND t.submitted_at IS NOT NULL) contributions,
+          (SELECT count(*) FROM reviews r WHERE r.reviewer_id=u.id) revisions
+          FROM users u ORDER BY u.id''').fetchall()
+    return page(req,'admin_users.html',user=u,people=people,msg=req.query_params.get('msg',''))
+
+@app.get('/admin/users/export.csv')
+def admin_export_users_csv(req:Request):
+    u=require(req,('admin',))
+    if not u:return Response('Accès refusé',status_code=403)
+    with db() as cx:
+        records=cx.execute('''SELECT u.id,u.full_name,u.email,u.role,u.active,u.must_change_password,
+          (SELECT count(*) FROM translations t WHERE t.contributor_id=u.id AND t.submitted_at IS NOT NULL) contributions,
+          (SELECT count(*) FROM reviews r WHERE r.reviewer_id=u.id) revisions
+          FROM users u ORDER BY u.id''').fetchall()
+        log(cx,u['id'],'users_csv_export',details=str(len(records)))
+    output=io.StringIO(newline='')
+    writer=csv.writer(output,delimiter=';',lineterminator='\r\n')
+    writer.writerow(('id','nom_complet','email','role','statut','contributions','revisions','changement_mot_de_passe_requis'))
+    for record in records:
+        writer.writerow([safe_csv(v) for v in (
+          record['id'],record['full_name'],record['email'],record['role'],
+          'Actif' if record['active'] else 'Desactive',record['contributions'],record['revisions'],
+          'Oui' if record['must_change_password'] else 'Non')])
+    return Response('\ufeff'+output.getvalue(),media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition':'attachment; filename="chadvoice_utilisateurs.csv"',
+                 'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'})
+
 @app.post('/admin/users')
-def admin_new_user(req:Request,csrf:str=Form(...),email:str=Form(...),full_name:str=Form(...),password:str=Form(...),role:str=Form(...)):
+def admin_new_user(req:Request,csrf:str=Form(...),email:str=Form(...),full_name:str=Form(...),
+                   password:str=Form(''),role:str=Form('contributor')):
     u=require(req,('admin',));err=secure(req,u,csrf)
     if err:return err
+    generated=not bool(password)
+    secret=generate_temp_password() if generated else password
     try:
-        uid=create_user(email,full_name,password,role)
+        uid=create_user(email,full_name,secret,role,must_change_password=generated)
     except ValueError as ex:
-        return redirect('/admin',msg='Compte non créé : '+str(ex))
+        return redirect('/admin/users',msg='Compte non créé : '+str(ex))
     except Exception:
-        return redirect('/admin',msg='Compte non créé : e-mail déjà utilisé ou erreur de base.')
+        return redirect('/admin/users',msg='Compte non créé : adresse e-mail déjà utilisée ou erreur de base.')
     with db() as cx:log(cx,u['id'],'user_created',details=str(uid))
-    return redirect('/admin',msg='Compte utilisateur créé.')
+    if generated:
+        return page(req,'admin_password_once.html',user=u,temporary_password=secret,
+                    account_email=email.strip().lower(),account_name=full_name.strip(),heading='Compte créé')
+    return redirect('/admin/users',msg='Compte utilisateur créé.')
+
+@app.get('/admin/users/{uid}')
+def admin_user_detail(req:Request,uid:int):
+    u=require(req,('admin',))
+    if not u:return redirect('/login')
+    with db() as cx:
+        other=cx.execute('SELECT id,email,full_name,role,active,must_change_password FROM users WHERE id=?',(uid,)).fetchone()
+    if not other:return Response('Utilisateur introuvable.',status_code=404)
+    return page(req,'admin_user_detail.html',user=u,person=other,msg=req.query_params.get('msg',''))
+
+@app.post('/admin/users/{uid}/update')
+def admin_update_user(req:Request,uid:int,csrf:str=Form(...),email:str=Form(...),
+                      full_name:str=Form(...),role:str=Form(...)):
+    u=require(req,('admin',));err=secure(req,u,csrf)
+    if err:return err
+    email=email.strip().lower();full_name=full_name.strip()
+    if not full_name or len(full_name)>200 or '@' not in email or len(email)>200 or role not in ('admin','contributor','reviewer'):
+        return Response('Informations du compte invalides.',status_code=400)
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        old=cx.execute('SELECT email,full_name,role FROM users WHERE id=?',(uid,)).fetchone()
+        if not old:return Response('Utilisateur introuvable.',status_code=404)
+        if uid==u['id'] and role!='admin':
+            return Response('Vous ne pouvez pas retirer vos propres droits administrateur.',status_code=403)
+        existing=cx.execute('SELECT id FROM users WHERE email=? AND id<>?',(email,uid)).fetchone()
+        if existing:return Response('Cette adresse e-mail appartient à un autre compte.',status_code=409)
+        cx.execute('UPDATE users SET email=?,full_name=?,role=? WHERE id=?',(email,full_name,role,uid))
+        if role!=old['role']:
+            cx.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+        log(cx,u['id'],'admin_user_updated',details=json.dumps({'uid':uid,'previous':dict(old),
+               'new':{'email':email,'full_name':full_name,'role':role}},ensure_ascii=False))
+    return redirect(f'/admin/users/{uid}',msg='Informations du compte mises à jour.')
+
+@app.post('/admin/users/{uid}/generate-password')
+def admin_generate_password(req:Request,uid:int,csrf:str=Form(...)):
+    u=require(req,('admin',));err=secure(req,u,csrf)
+    if err:return err
+    new_password=generate_temp_password()
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        other=cx.execute('SELECT full_name,email FROM users WHERE id=?',(uid,)).fetchone()
+        if not other:return Response('Utilisateur introuvable.',status_code=404)
+        cx.execute('UPDATE users SET pw_hash=?,must_change_password=1 WHERE id=?',
+                   (hash_password(new_password),uid))
+        cx.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+        log(cx,u['id'],'password_reset_generated',details=str(uid))
+    return page(req,'admin_password_once.html',user=u,temporary_password=new_password,
+                account_email=other['email'],account_name=other['full_name'],heading='Mot de passe temporaire renouvelé')
 
 @app.post('/admin/users/{uid}/toggle')
 def toggle_user(req:Request,uid:int,csrf:str=Form(...)):
     u=require(req,('admin',));err=secure(req,u,csrf)
     if err:return err
-    if uid==u['id']:return redirect('/admin',msg='Impossible de désactiver votre propre compte.')
+    if uid==u['id']:return redirect('/admin/users',msg='Impossible de désactiver votre propre compte.')
     with db() as cx:
         cx.execute('BEGIN IMMEDIATE')
         other=cx.execute('SELECT active FROM users WHERE id=?',(uid,)).fetchone()
@@ -996,18 +1083,18 @@ def toggle_user(req:Request,uid:int,csrf:str=Form(...)):
             cx.execute('UPDATE users SET active=? WHERE id=?',(0 if other['active'] else 1,uid))
             cx.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
             log(cx,u['id'],'user_toggle',details=str(uid))
-    return redirect('/admin',msg='Statut du compte modifié.')
+    return redirect('/admin/users',msg='Statut du compte modifié.')
 
 @app.post('/admin/users/{uid}/password')
 def admin_reset_password(req:Request,uid:int,csrf:str=Form(...),password:str=Form(...)):
     u=require(req,('admin',));err=secure(req,u,csrf)
     if err:return err
-    if len(password)<10:return redirect('/admin',msg='Mot de passe trop court (10 caractères minimum).')
+    if len(password)<10:return redirect('/admin/users',msg='Mot de passe trop court (10 caractères minimum).')
     with db() as cx:
-        cx.execute('UPDATE users SET pw_hash=? WHERE id=?',(hash_password(password),uid))
+        cx.execute('UPDATE users SET pw_hash=?,must_change_password=1 WHERE id=?',(hash_password(password),uid))
         cx.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
         log(cx,u['id'],'password_reset',details=str(uid))
-    return redirect('/admin',msg='Mot de passe temporaire mis à jour.')
+    return redirect('/admin/users',msg='Mot de passe temporaire mis à jour.')
 
 def duration_of(content, suffix):
     if suffix!='.wav':return None
