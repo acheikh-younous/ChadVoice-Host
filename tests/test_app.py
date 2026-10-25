@@ -597,3 +597,27 @@ def test_23_presence_offline_for_closed_or_stale_session(c):
         assert cx.execute("SELECT count(*) FROM sessions WHERE token_hash=?",(hashlib.sha256(old_session_token.encode()).hexdigest(),)).fetchone()[0]==0
     # A nonexpired stale login does not count as online after 5 min.
     admin.__exit__(None,None,None);contributor.__exit__(None,None,None)
+
+
+def test_24_admin_audio_library_search_filters_and_permissions(c):
+    admin,_=userclient('admin@cv.test','secret-admin-2026')
+    contributor,_=userclient('contrib@cv.test','secret-contrib-2026')
+    assert contributor.get('/admin/segments',follow_redirects=False).status_code == 303
+    home=admin.get('/').text
+    assert 'Gestion des audios' in home
+    library=admin.get('/admin/segments')
+    assert library.status_code==200
+    assert 'Tous les audios' in library.text
+    assert 'Contributeur Alpha' in library.text
+    with db() as cx:
+        cid=cx.execute("SELECT id FROM users WHERE email='contrib@cv.test'").fetchone()['id']
+        total=cx.execute('SELECT count(*) FROM translations WHERE contributor_id=?',(cid,)).fetchone()[0]
+    by_contrib=admin.get(f'/admin/segments?contributor={cid}')
+    assert by_contrib.status_code==200
+    assert f'{total} résultat(s)' in by_contrib.text
+    assert f'value="{cid}" selected' in by_contrib.text
+    assert admin.get('/admin/segments?status=not_approved').status_code==200
+    assert admin.get('/admin/segments?status=attention').status_code==200
+    assert admin.get('/admin/segments?q=Contributeur+Alpha').status_code==200
+    assert 'Voir tous les audios / Rechercher' in admin.get('/admin').text
+    admin.__exit__(None,None,None);contributor.__exit__(None,None,None)
