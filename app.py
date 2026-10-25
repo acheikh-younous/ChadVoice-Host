@@ -714,23 +714,42 @@ def admin_bulk_approve(req:Request,csrf:str=Form(...),segment_ids:list[int]=Form
     return redirect('/admin/segments?status=submitted',msg=f'{len(items)} segment(s) validé(s) et historisé(s).')
 
 @app.get('/admin/segments')
-def admin_segment_library(req:Request, q:str='', status:str='all', page_num:int=1):
+def admin_segment_library(req:Request, q:str='', status:str='all', contributor:str='all', page_num:int=1):
     u=require(req,('admin',))
     if not u:return redirect('/login')
     q=q.strip()[:120]
-    if status not in {*STATUS_LABEL.keys(),'archived','all'}:status='all'
+    allowed={*STATUS_LABEL.keys(),'archived','all','not_approved','attention'}
+    if status not in allowed: status='all'
+    # Only numeric ids returned by the contributor selector are accepted.
+    contributor=contributor.strip()
+    contributor_id=int(contributor) if contributor.isdecimal() and len(contributor)<=18 else None
+    contributor=str(contributor_id) if contributor_id is not None else 'all'
     page_num=max(1,min(page_num,100000))
     filters=[]; args=[]
-    if status=='archived':filters.append('s.archived_at IS NOT NULL')
-    elif status!='all':filters.append('s.archived_at IS NULL AND s.status=?');args.append(status)
+    if status=='archived':
+        filters.append('s.archived_at IS NOT NULL')
+    elif status=='not_approved':
+        filters.append("s.archived_at IS NULL AND s.status!='approved'")
+    elif status=='attention':
+        filters.append("s.archived_at IS NULL AND s.status IN ('submitted','needs_changes','rejected')")
+    elif status!='all':
+        filters.append('s.archived_at IS NULL AND s.status=?');args.append(status)
+    if contributor_id is not None:
+        filters.append('''EXISTS(SELECT 1 FROM translations ct WHERE
+           ct.segment_id=s.id AND ct.contributor_id=?)''')
+        args.append(contributor_id)
     if q:
         filters.append('''(LOWER(s.code) LIKE ? OR LOWER(s.original_name) LIKE ?
             OR LOWER(s.source_id) LIKE ? OR LOWER(s.speaker_id) LIKE ?
             OR EXISTS (SELECT 1 FROM translations t WHERE t.segment_id=s.id
-                AND (LOWER(t.latin) LIKE ? OR LOWER(t.french) LIKE ?)))''')
-        args.extend(['%'+q.lower()+'%']*6)
+                AND (LOWER(t.latin) LIKE ? OR LOWER(t.french) LIKE ?))
+            OR EXISTS (SELECT 1 FROM translations t JOIN users cu ON cu.id=t.contributor_id
+                WHERE t.segment_id=s.id AND (LOWER(cu.full_name) LIKE ? OR LOWER(cu.email) LIKE ?)))''')
+        args.extend(['%'+q.lower()+'%']*8)
     where=' WHERE '+(' AND '.join(filters)) if filters else ''
     with db() as cx:
+        contributors=[dict(r) for r in cx.execute('''SELECT DISTINCT u.id,u.full_name FROM users u
+           JOIN translations t ON t.contributor_id=u.id ORDER BY u.full_name''').fetchall()]
         total=cx.execute('SELECT count(*) n FROM segments s'+where,args).fetchone()['n']
         page_num=min(page_num,max(1,(total+39)//40))
         records=cx.execute('''SELECT s.id,s.code,s.original_name,s.source_id,s.speaker_id,s.status,
@@ -739,6 +758,7 @@ def admin_segment_library(req:Request, q:str='', status:str='all', page_num:int=
            LEFT JOIN users u ON u.id=t.contributor_id'''+where+
            ' ORDER BY s.id DESC LIMIT 40 OFFSET ?',args+[40*(page_num-1)]).fetchall()
     return page(req,'admin_segments.html',user=u,records=records,total=total,q=q,filter_status=status,
+         filter_contributor=contributor,contributors=contributors,
          current_page=page_num,page_count=max(1,(total+39)//40),statuses=STATUS_LABEL,msg=req.query_params.get('msg',''))
 
 @app.get('/admin/segments/{sid}')
