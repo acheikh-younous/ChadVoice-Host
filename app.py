@@ -7,6 +7,7 @@ import hmac
 import io
 import json
 import mimetypes
+import re
 import smtplib
 from email.message import EmailMessage
 from fastapi import BackgroundTasks
@@ -42,6 +43,7 @@ AUDIO.mkdir(parents=True, exist_ok=True)
 LEASE = 30 * 60  # temporary preview; permanent owner only after submission
 DRAFT_LEASE = 48 * 3600
 SESSION_TTL = 12 * 3600
+SEGMENT_CODE_PATTERN = re.compile(r'CV[0-9]{4,8}\Z')
 MAX_AUDIO = 20 * 1024 * 1024
 MAX_ARCHIVE = 1024 * 1024 * 1024
 ACCEPT = {'.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.webm': 'audio/webm'}
@@ -93,6 +95,7 @@ def init_db():
           email TEXT NOT NULL UNIQUE COLLATE NOCASE,
           full_name TEXT NOT NULL,
           pw_hash TEXT NOT NULL,
+          must_change_password INTEGER NOT NULL DEFAULT 0,
           role TEXT NOT NULL CHECK(role IN ('admin','reviewer','contributor')),
           active INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -191,6 +194,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS ix_segment_status ON segments(status, id);
         CREATE INDEX IF NOT EXISTS ix_reviewer_seg ON reviews(segment_id,id);
         ''')
+        # Existing users retain passwords; only new temporary passwords require a reset.
+        if 'must_change_password' not in [r['name'] for r in cx.execute('PRAGMA table_info(users)')]:
+            cx.execute('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0')
         # Backwards-compatible v1.3 migration for existing SQLite databases.
         if 'archived_at' not in [row['name'] for row in cx.execute('PRAGMA table_info(segments)')]:
             cx.execute('ALTER TABLE segments ADD COLUMN archived_at TEXT')
@@ -283,13 +289,20 @@ def check_password(pw: str, stored: str):
     except (ValueError, TypeError):
         return False
 
-def create_user(email: str, name: str, pw: str, role='contributor'):
+def create_user(email: str, name: str, pw: str, role='contributor', *, must_change_password=False):
     if len(pw)<10 or len(pw)>256: raise ValueError('Mot de passe : 10 à 256 caractères.')
     if role not in ('contributor','reviewer','admin'): raise ValueError('Rôle non autorisé')
     email=email.strip().lower(); name=name.strip()
     if '@' not in email or len(email)>200 or not name or len(name)>200: raise ValueError('Compte invalide')
     with db() as cx:
-        return cx.execute('INSERT INTO users(email,full_name,pw_hash,role) VALUES(?,?,?,?)',(email,name,hash_password(pw),role)).lastrowid
+        return cx.execute('INSERT INTO users(email,full_name,pw_hash,role,must_change_password) VALUES(?,?,?,?,?)',(email,name,hash_password(pw),role,int(must_change_password))).lastrowid
+
+def generate_temp_password():
+    # One unpredictable ten-digit password per account; never use a shared default.
+    return ''.join(str(secrets.randbelow(10)) for _ in range(10))
+
+def valid_segment_code(code):
+    return bool(SEGMENT_CODE_PATTERN.fullmatch(str(code or '')))
 
 def log(cx, actor, action, seg=None, details=''):
     cx.execute('INSERT INTO audit_logs(actor_id,action,segment_id,details) VALUES(?,?,?,?)',(actor,action,seg,str(details)[:1000]))
@@ -412,7 +425,7 @@ def login(req: Request,email: str=Form(...),password: str=Form(...)):
             hashlib.sha256(raw.encode()).hexdigest(),u['id'],secrets.token_urlsafe(32),int(time.time())+SESSION_TTL))
         mark_presence(cx,u['id'],int(time.time()),'/')
         log(cx,u['id'],'login')
-    r=redirect('/')
+    r=redirect('/account' if u['must_change_password'] else '/')
     r.set_cookie('cv_session',raw,max_age=SESSION_TTL,httponly=True,samesite='strict',secure=os.getenv('CHADVOICE_HTTPS','0')=='1',path='/')
     return r
 
@@ -425,6 +438,16 @@ def logout(req:Request, csrf: str=Form(...)):
         log(cx,u['id'],'logout')
     r=redirect('/login');r.delete_cookie('cv_session',path='/');return r
 
+@app.middleware('http')
+async def enforce_first_password_change(req:Request, call_next):
+    path=req.url.path
+    if req.cookies.get('cv_session') and not (path.startswith('/static/') or path in
+       ('/login','/health','/account','/account/password','/logout','/setup')):
+        current,_=user_session(req)
+        if current and current.get('must_change_password'):
+            return redirect('/account',msg='Veuillez définir votre mot de passe personnel avant de continuer.')
+    return await call_next(req)
+
 @app.get('/account')
 def account(req:Request):
     u=require(req)
@@ -435,10 +458,10 @@ def account(req:Request):
 def change_password(req:Request, csrf:str=Form(...),old:str=Form(...),new:str=Form(...)):
     u=require(req);err=secure(req,u,csrf)
     if err:return err
-    if not check_password(old,u['pw_hash']) or len(new)<10:
+    if not check_password(old,u['pw_hash']) or len(new)<10 or new==old:
         return page(req,'account.html',user=u,error='Ancien mot de passe incorrect, ou nouveau trop court.',status=400)
     with db() as cx:
-        cx.execute('UPDATE users SET pw_hash=? WHERE id=?',(hash_password(new),u['id']))
+        cx.execute('UPDATE users SET pw_hash=?,must_change_password=0 WHERE id=?',(hash_password(new),u['id']))
         cx.execute('DELETE FROM sessions WHERE user_id=? AND token_hash<>?',(u['id'],hashlib.sha256(req.cookies['cv_session'].encode()).hexdigest()))
         log(cx,u['id'],'password_changed')
     return redirect('/account',msg='Mot de passe mis à jour.')
@@ -758,6 +781,7 @@ def admin_segment_library(req:Request, q:str='', status:str='all', contributor:s
         args.extend(['%'+unicode_search_fold(q)+'%']*8)
     where=' WHERE '+(' AND '.join(filters)) if filters else ''
     with db() as cx:
+        invalid_code_count=sum(not valid_segment_code(row['code']) for row in cx.execute('SELECT code FROM segments').fetchall())
         contributors=[dict(r) for r in cx.execute('''SELECT DISTINCT u.id,u.full_name FROM users u
            JOIN translations t ON t.contributor_id=u.id ORDER BY u.full_name''').fetchall()]
         total=cx.execute('SELECT count(*) n FROM segments s'+where,args).fetchone()['n']
@@ -767,7 +791,9 @@ def admin_segment_library(req:Request, q:str='', status:str='all', contributor:s
            LEFT JOIN translations t ON t.segment_id=s.id
            LEFT JOIN users u ON u.id=t.contributor_id'''+where+
            ' ORDER BY s.id DESC LIMIT 40 OFFSET ?',args+[40*(page_num-1)]).fetchall()
+    records=[{**dict(rec),'invalid_code':not valid_segment_code(rec['code'])} for rec in records]
     return page(req,'admin_segments.html',user=u,records=records,total=total,q=q,filter_status=status,
+         invalid_code_count=invalid_code_count,
          filter_contributor=contributor,contributors=contributors,
          current_page=page_num,page_count=max(1,(total+39)//40),statuses=STATUS_LABEL,msg=req.query_params.get('msg',''))
 
@@ -788,7 +814,26 @@ def admin_segment_detail(req:Request,sid:int):
         has_history=segment_has_history(cx,sid)
     approved=next((r for r in reviews if r['decision']=='approved'),None)
     return page(req,'admin_segment_detail.html',user=u,s=seg,reviews=reviews,versions=versions,
+          invalid_code=not valid_segment_code(seg['code']),
           latest_approval=approved,busy=busy,has_history=has_history,msg=req.query_params.get('msg',''))
+
+@app.post('/admin/segments/{sid}/code')
+def admin_change_segment_code(req:Request,sid:int,csrf:str=Form(...),new_code:str=Form(...)):
+    u=require(req,('admin',));err=secure(req,u,csrf)
+    if err:return err
+    new_code=new_code.strip().upper()
+    if not valid_segment_code(new_code):
+        return Response('Identifiant invalide : utilisez CV suivi de 4 à 8 chiffres (ex. CV1064).',status_code=400)
+    with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        old=cx.execute('SELECT code FROM segments WHERE id=?',(sid,)).fetchone()
+        if not old:return Response('Segment introuvable',status_code=404)
+        if old['code']==new_code:return redirect(f'/admin/segments/{sid}',msg='Identifiant inchangé.')
+        if cx.execute('SELECT 1 FROM segments WHERE code=? AND id<>?',(new_code,sid)).fetchone():
+            return Response('Cet identifiant existe déjà.',status_code=409)
+        cx.execute('UPDATE segments SET code=? WHERE id=?',(new_code,sid))
+        log(cx,u['id'],'admin_segment_code_changed',sid,f"{old['code']} -> {new_code}")
+    return redirect(f'/admin/segments/{sid}',msg='Code modifié sans changer les références audio ni les traductions.')
 
 @app.post('/admin/segments/{sid}/metadata')
 def admin_segment_metadata(req:Request,sid:int,csrf:str=Form(...),name:str=Form(...),
