@@ -621,3 +621,23 @@ def test_24_admin_audio_library_search_filters_and_permissions(c):
     assert admin.get('/admin/segments?q=Contributeur+Alpha').status_code==200
     assert 'Voir tous les audios / Rechercher' in admin.get('/admin').text
     admin.__exit__(None,None,None);contributor.__exit__(None,None,None)
+
+
+def test_25_unicode_search_for_accented_contributor(c):
+    admin,_=userclient('admin@cv.test','secret-admin-2026')
+    with db() as cx:
+        record=cx.execute("SELECT id,full_name FROM users WHERE email='contrib@cv.test'").fetchone()
+        contributor_id=record['id'];old_name=record['full_name']
+        expected=cx.execute('SELECT count(*) FROM translations WHERE contributor_id=?',(contributor_id,)).fetchone()[0]
+        assert expected>0
+        cx.execute('UPDATE users SET full_name=? WHERE id=?',('Élodie Test',contributor_id))
+    try:
+        for term in ('Élodie','élodie','ÉLODIE'):
+            response=admin.get('/admin/segments',params={'q':term,'contributor':str(contributor_id)})
+            assert response.status_code==200
+            assert f'{expected} segment(s)' in response.text
+            assert 'Élodie Test' in response.text
+    finally:
+        with db() as cx:
+            cx.execute('UPDATE users SET full_name=? WHERE id=?',(old_name,contributor_id))
+        admin.__exit__(None,None,None)
