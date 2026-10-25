@@ -458,8 +458,8 @@ def account(req:Request):
 def change_password(req:Request, csrf:str=Form(...),old:str=Form(...),new:str=Form(...)):
     u=require(req);err=secure(req,u,csrf)
     if err:return err
-    if not check_password(old,u['pw_hash']) or len(new)<10 or new==old:
-        return page(req,'account.html',user=u,error='Ancien mot de passe incorrect, ou nouveau trop court.',status=400)
+    if not check_password(old,u['pw_hash']) or not 10<=len(new)<=256 or new==old:
+        return page(req,'account.html',user=u,error='Vérifiez votre ancien mot de passe et choisissez un nouveau mot de passe différent, de 10 à 256 caractères.',status=400)
     with db() as cx:
         cx.execute('UPDATE users SET pw_hash=?,must_change_password=0 WHERE id=?',(hash_password(new),u['id']))
         cx.execute('DELETE FROM sessions WHERE user_id=? AND token_hash<>?',(u['id'],hashlib.sha256(req.cookies['cv_session'].encode()).hexdigest()))
@@ -1079,18 +1079,21 @@ def toggle_user(req:Request,uid:int,csrf:str=Form(...)):
     with db() as cx:
         cx.execute('BEGIN IMMEDIATE')
         other=cx.execute('SELECT active FROM users WHERE id=?',(uid,)).fetchone()
-        if other:
-            cx.execute('UPDATE users SET active=? WHERE id=?',(0 if other['active'] else 1,uid))
-            cx.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
-            log(cx,u['id'],'user_toggle',details=str(uid))
+        if not other:return Response('Utilisateur introuvable.',status_code=404)
+        cx.execute('UPDATE users SET active=? WHERE id=?',(0 if other['active'] else 1,uid))
+        cx.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+        log(cx,u['id'],'user_toggle',details=str(uid))
     return redirect('/admin/users',msg='Statut du compte modifié.')
 
 @app.post('/admin/users/{uid}/password')
 def admin_reset_password(req:Request,uid:int,csrf:str=Form(...),password:str=Form(...)):
     u=require(req,('admin',));err=secure(req,u,csrf)
     if err:return err
-    if len(password)<10:return redirect('/admin/users',msg='Mot de passe trop court (10 caractères minimum).')
+    if not 10<=len(password)<=256:return Response('Mot de passe : 10 à 256 caractères.',status_code=400)
     with db() as cx:
+        cx.execute('BEGIN IMMEDIATE')
+        if not cx.execute('SELECT 1 FROM users WHERE id=?',(uid,)).fetchone():
+            return Response('Utilisateur introuvable.',status_code=404)
         cx.execute('UPDATE users SET pw_hash=?,must_change_password=1 WHERE id=?',(hash_password(password),uid))
         cx.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
         log(cx,u['id'],'password_reset',details=str(uid))
