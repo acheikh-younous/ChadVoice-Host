@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}Utilisateur{% endblock %}{% block content %}
+<a class="back" href="/admin/users">← Gestion des utilisateurs</a><h1>{{person.full_name}}</h1>
+<section class="card narrow"><h2>Modifier les informations</h2>
+<form method="post" action="/admin/users/{{person.id}}/update" class="form-stack"><input type="hidden" name="csrf" value="{{user.csrf}}">
+<label>Nom complet<input name="full_name" maxlength="200" required value="{{person.full_name}}"></label>
+<label>E-mail<input name="email" type="email" required value="{{person.email}}"></label>
+<label>Rôle<select name="role"><option value="contributor" {% if person.role=='contributor' %}selected{% endif %}>Contributeur</option><option value="reviewer" {% if person.role=='reviewer' %}selected{% endif %}>Réviseur</option><option value="admin" {% if person.role=='admin' %}selected{% endif %}>Administrateur</option></select></label>
+<button class="btn primary" type="submit">Enregistrer</button></form></section>
+<section class="card narrow after-card"><h2>Mot de passe et accès</h2>
+<form method="post" action="/admin/users/{{person.id}}/generate-password" data-confirm="Réinitialiser le mot de passe et déconnecter cet utilisateur ?"><input type="hidden" name="csrf" value="{{user.csrf}}"><button class="btn secondary">Générer un mot de passe temporaire</button></form>
+{% if person.id!=user.id %}<form method="post" action="/admin/users/{{person.id}}/toggle"><input type="hidden" name="csrf" value="{{user.csrf}}"><button class="btn secondary">{{'Désactiver' if person.active else 'Réactiver'}} le compte</button></form>{% endif %}</section>{% endblock %}
