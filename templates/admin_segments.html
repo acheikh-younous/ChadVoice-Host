@@ -1,12 +1,12 @@
 {% extends "base.html" %}{% block title %}Bibliothèque des segments{% endblock %}{% block content %}
-<div class="eyebrow">ADMINISTRATION DU CORPUS</div><h1>Bibliothèque des audios</h1>
+<div class="eyebrow">ADMINISTRATION DU CORPUS</div><h1>Gestion des audios</h1>
 <p class="lead">Rechercher dans tous les enregistrements, retrouver les traductions, gérer les validations et les métadonnées.</p>
 <div class="card"><form method="get" action="/admin/segments" class="form-stack">
-<div class="twocol"><label>Recherche (code, nom, source, locuteur, textes)<input name="q" maxlength="120" value="{{q}}" placeholder="CV001, mot français, film..."></label>
-<label>État<select name="status"><option value="all" {% if filter_status=='all' %}selected{% endif %}>Tous</option>
-<option value="archived" {% if filter_status=='archived' %}selected{% endif %}>Archivés</option>
-{% for key,label in statuses.items() %}<option value="{{key}}" {% if filter_status==key %}selected{% endif %}>{{label}}</option>{% endfor %}</select></label></div>
-<button class="btn secondary" type="submit">Rechercher</button></form><p class="muted">{{total}} segment(s), page {{current_page}} sur {{page_count}}</p></div>
+<label>Recherche (code, nom, source, locuteur, textes, contributeur)<input name="q" maxlength="120" value="{{q}}" placeholder="CV001, nom du contributeur, traduction..."></label><div class="twocol">
+<label>État<select name="status"><option value="all" {% if filter_status=='all' %}selected{% endif %}>Tous les audios</option>
+<option value="archived" {% if filter_status=='archived' %}selected{% endif %}>Archivés</option><option value="not_approved" {% if filter_status=='not_approved' %}selected{% endif %}>Non validés (actifs)</option><option value="attention" {% if filter_status=='attention' %}selected{% endif %}>En révision ou correction</option>
+{% for key,label in statuses.items() %}<option value="{{key}}" {% if filter_status==key %}selected{% endif %}>{{label}}</option>{% endfor %}</select></label><label>Contributeur<select name="contributor"><option value="all">Tous les contributeurs</option>{% for person in contributors %}<option value="{{person.id}}" {% if filter_contributor==person.id|string %}selected{% endif %}>{{person.full_name}}</option>{% endfor %}</select></label></div>
+<button class="btn secondary" type="submit">Rechercher / Filtrer</button> <a class="btn secondary" href="/admin/segments">Réinitialiser</a></form><p class="muted">{{total}} segment(s), page {{current_page}} sur {{page_count}}</p></div>
 <form method="post" action="/admin/segments/bulk-approve" data-confirm="Valider les segments sélectionnés sans réécoute individuelle ? Vérifiez qu’ils sont complets et conformes.">
 <input type="hidden" name="csrf" value="{{user.csrf}}">
 <div class="card after-card"><div class="table-scroll"><table><thead><tr><th>Lot</th><th>Segment</th><th>Nom</th><th>Statut</th><th>Contribution</th><th>Action</th></tr></thead>
@@ -17,7 +17,7 @@
 <div class="form-stack"><p class="muted">Validation groupée : 30 au maximum ; uniquement les contributions soumises, complètes et non inaudibles. Aucune correction du texte n'est effectuée. Vérifiez chaque sélection.</p>
 <label>Taper VALIDER pour confirmer<input name="confirmation" placeholder="VALIDER" required></label>
 <button class="btn primary" type="submit">Valider les contributions cochées</button></div></div></form>
-<div class="button-row after-card">{% if current_page>1 %}<a class="btn secondary" href="/admin/segments?q={{q|urlencode}}&status={{filter_status}}&page_num={{current_page-1}}">← Précédent</a>{% endif %}
-{% if current_page<page_count %}<a class="btn secondary" href="/admin/segments?q={{q|urlencode}}&status={{filter_status}}&page_num={{current_page+1}}">Suivant →</a>{% endif %}</div>
+<div class="button-row after-card">{% if current_page>1 %}<a class="btn secondary" href="/admin/segments?q={{q|urlencode}}&status={{filter_status}}&contributor={{filter_contributor}}&page_num={{current_page-1}}">← Précédent</a>{% endif %}
+{% if current_page<page_count %}<a class="btn secondary" href="/admin/segments?q={{q|urlencode}}&status={{filter_status}}&contributor={{filter_contributor}}&page_num={{current_page+1}}">Suivant →</a>{% endif %}</div>
 <a class="back" href="/admin">← Retour à l'administration</a>
 {% endblock %}
