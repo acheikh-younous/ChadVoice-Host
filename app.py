@@ -50,6 +50,12 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount('/static', StaticFiles(directory=ROOT/'static'), name='static')
 jinja = Environment(loader=FileSystemLoader(ROOT/'templates'), autoescape=select_autoescape(['html','xml']))
 
+def unicode_search_fold(value):
+    if value is None:
+        return None
+    return unicodedata.normalize('NFC', str(value)).casefold()
+
+
 @contextmanager
 def db():
     if DB_URL:
@@ -58,6 +64,8 @@ def db():
         return
     cx = sqlite3.connect(DB, timeout=20, isolation_level=None)
     cx.row_factory = sqlite3.Row
+    # SQLite LOWER is ASCII-only: register a Unicode-aware normalization function.
+    cx.create_function('cv_search_fold', 1, unicode_search_fold, deterministic=True)
     cx.execute('PRAGMA foreign_keys=ON')
     cx.execute('PRAGMA busy_timeout=20000')
     try:
@@ -739,13 +747,15 @@ def admin_segment_library(req:Request, q:str='', status:str='all', contributor:s
            ct.segment_id=s.id AND ct.contributor_id=?)''')
         args.append(contributor_id)
     if q:
-        filters.append('''(LOWER(s.code) LIKE ? OR LOWER(s.original_name) LIKE ?
-            OR LOWER(s.source_id) LIKE ? OR LOWER(s.speaker_id) LIKE ?
+        # PostgreSQL LOWER handles Unicode; SQLite requires Unicode-aware case folding.
+        fold='LOWER' if DB_URL else 'cv_search_fold'
+        filters.append(f'''({fold}(s.code) LIKE ? OR {fold}(s.original_name) LIKE ?
+            OR {fold}(s.source_id) LIKE ? OR {fold}(s.speaker_id) LIKE ?
             OR EXISTS (SELECT 1 FROM translations t WHERE t.segment_id=s.id
-                AND (LOWER(t.latin) LIKE ? OR LOWER(t.french) LIKE ?))
+                AND ({fold}(t.latin) LIKE ? OR {fold}(t.french) LIKE ?))
             OR EXISTS (SELECT 1 FROM translations t JOIN users cu ON cu.id=t.contributor_id
-                WHERE t.segment_id=s.id AND (LOWER(cu.full_name) LIKE ? OR LOWER(cu.email) LIKE ?)))''')
-        args.extend(['%'+q.lower()+'%']*8)
+                WHERE t.segment_id=s.id AND ({fold}(cu.full_name) LIKE ? OR {fold}(cu.email) LIKE ?)))''')
+        args.extend(['%'+unicode_search_fold(q)+'%']*8)
     where=' WHERE '+(' AND '.join(filters)) if filters else ''
     with db() as cx:
         contributors=[dict(r) for r in cx.execute('''SELECT DISTINCT u.id,u.full_name FROM users u
