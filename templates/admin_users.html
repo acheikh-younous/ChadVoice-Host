@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Gestion des utilisateurs{% endblock %}{% block content %}
+<div class="eyebrow">ADMINISTRATION</div><h1>Gestion des utilisateurs</h1>
+<p class="lead">Créer et modifier les comptes, gérer les accès, exporter au format CSV.</p>
+<a class="btn secondary" href="/admin/users/export.csv">↓ Télécharger les utilisateurs (CSV pour Excel)</a>
+<p class="muted">Le fichier contient les noms, e-mails, rôles et contributions, jamais les mots de passe.</p>
+<div class="columns-2 after-card"><section class="card"><h2>Créer un compte</h2>
+<p>Un code temporaire aléatoire de dix chiffres sera affiché une seule fois. Son titulaire devra le modifier à sa première connexion.</p>
+<form method="post" action="/admin/users" class="form-stack"><input type="hidden" name="csrf" value="{{user.csrf}}">
+<label>Nom complet<input name="full_name" maxlength="200" required></label>
+<label>Adresse e-mail<input name="email" type="email" maxlength="200" required></label>
+<label>Rôle<select name="role"><option value="contributor">Contributeur</option><option value="reviewer">Réviseur</option><option value="admin">Administrateur</option></select></label>
+<button class="btn primary" type="submit">Créer et générer le mot de passe</button></form></section>
+<section class="card"><h2>Sécurité</h2><p>Le mot de passe temporaire est unique, non enregistré en clair et doit être transmis par un canal privé.</p><p>La désactivation d'un utilisateur ne supprime pas ses contributions.</p></section></div>
+<section class="card after-card"><h2>Comptes existants</h2><div class="table-scroll"><table><thead><tr><th>Nom</th><th>E-mail</th><th>Rôle</th><th>Contributions</th><th>Révisions</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
+{% for p in people %}<tr><td>{{p.full_name}}</td><td>{{p.email}}</td><td>{{p.role}}</td><td>{{p.contributions}}</td><td>{{p.revisions}}</td><td>{{'Actif' if p.active else 'Désactivé'}}</td><td><a href="/admin/users/{{p.id}}">Gérer →</a></td></tr>{% endfor %}
+</tbody></table></div></section>{% endblock %}
