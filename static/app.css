@@ -169,3 +169,5 @@ tbody tr:hover{background:#fbfdff}
 }
 @media(max-width:360px){.metrics{grid-template-columns:1fr}.login-hero h1{font-size:1.7rem}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+
+.admin-shortcuts{display:flex;flex-wrap:wrap;gap:11px;margin-top:16px}.admin-shortcuts .btn{flex:1 1 190px}
