@@ -1,6 +1,20 @@
 'use strict';
 // Aucune ressource réseau externe, aucun suivi des utilisateurs.
 document.addEventListener('DOMContentLoaded', () => {
+  // Navigation mobile accessible : bouton, clic hors menu, liens et touche Échap.
+  const menuToggle=document.querySelector('[data-menu-toggle]');
+  const menuClose=document.querySelector('[data-menu-close]');
+  const sidebar=document.getElementById('primary-sidebar');
+  const setMenuOpen=(isOpen)=>{
+    document.body.classList.toggle('menu-open',isOpen);
+    menuToggle?.setAttribute('aria-expanded',String(isOpen));
+    menuToggle?.setAttribute('aria-label',isOpen?'Fermer le menu':'Ouvrir le menu');
+  };
+  menuToggle?.addEventListener('click',()=>setMenuOpen(!document.body.classList.contains('menu-open')));
+  menuClose?.addEventListener('click',()=>setMenuOpen(false));
+  sidebar?.querySelectorAll('nav a').forEach(link=>link.addEventListener('click',()=>setMenuOpen(false)));
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')setMenuOpen(false);});
+  window.matchMedia('(min-width: 801px)').addEventListener('change',event=>{if(event.matches)setMenuOpen(false);});
   document.querySelectorAll('form[data-confirm]').forEach(f => f.addEventListener('submit', e => {
     if(!confirm(f.dataset.confirm)) e.preventDefault();
   }));
