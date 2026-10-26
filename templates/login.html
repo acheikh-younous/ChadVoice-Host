@@ -1,8 +1,25 @@
 {% extends "base.html" %}{% block title %}Connexion{% endblock %}{% block content %}
-<div class="login-shell"><section class="login-hero"><div class="large-logo-wrap"><img src="/static/chadvoice-logo.png" alt="Logo ChadVoice" class="login-logo" width="120" height="120"></div><div class="eyebrow invert">CHADVOICE · RECHERCHE</div><h1>Une langue.<br>Des voix.<br><em>Un patrimoine.</em></h1><p>Contribuez à construire un corpus scientifique de traduction de la parole en arabe tchadien vers le français.</p><div class="hero-bars"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><small>Les enregistrements restent accessibles uniquement aux participants autorisés.</small></section>
-<section class="login-form"><div class="eyebrow">ESPACE SÉCURISÉ</div><h2>Bienvenue sur ChadVoice</h2><p>Connectez-vous pour participer à l'annotation ou à la révision.</p>
-{% if error %}<div class="alert" role="alert">{{error}}</div>{% endif %}
-{% if not has_accounts %}<div class="notice">Aucun compte administrateur n'existe. Dans le terminal, exécutez <code>python manage.py init</code> avant de vous connecter.</div>{% endif %}
-<form method="post" action="/login"><label>Adresse e-mail<input type="email" name="email" required autocomplete="username" placeholder="prenom@exemple.com"></label><label>Mot de passe<input type="password" name="password" required autocomplete="current-password" placeholder="Votre mot de passe"></label><button class="btn primary full" type="submit">Se connecter <span>→</span></button></form><div class="smallprint">L'inscription est gérée par l'équipe de recherche. Demandez vos identifiants à un administrateur.</div>
+<div class="login-shell">
+<section class="login-hero" aria-labelledby="welcome-title">
+ <div class="large-logo-wrap"><img src="/static/chadvoice-logo.png" alt="Logo ChadVoice" class="login-logo" width="92" height="92"></div>
+ <div class="eyebrow invert">CHADVOICE · RECHERCHE COLLABORATIVE</div>
+ <h1 id="welcome-title">Chaque voix compte.<br><em>Chaque mot préserve une langue.</em></h1>
+ <p>En transcrivant et en traduisant la parole en arabe tchadien vers le français, vous contribuez à construire un corpus scientifique utile à la recherche et à la valorisation de notre patrimoine linguistique.</p>
+ <div class="login-purpose"><strong>Votre contribution fait la différence</strong>
+ <div><span>01</span><p>Écoutez et transcrivez fidèlement la parole.</p></div>
+ <div><span>02</span><p>Traduisez en français avec précision.</p></div>
+ <div><span>03</span><p>Participez à une ressource linguistique durable.</p></div></div>
+ <small>Les enregistrements sont privés et accessibles uniquement aux participants autorisés.</small>
+</section>
+<section class="login-form">
+ <div class="login-form-panel"><div class="eyebrow">ESPACE PARTICIPANT · ACCÈS SÉCURISÉ</div>
+ <h2>Bienvenue sur ChadVoice</h2><p>Retrouvez votre espace de contribution, de révision ou d'administration.</p>
+ {% if error %}<div class="alert" role="alert">{{error}}</div>{% endif %}
+ {% if not has_accounts %}<div class="notice">Aucun compte administrateur n'existe. Dans le terminal, exécutez <code>python manage.py init</code> avant de vous connecter.</div>{% endif %}
+ <form method="post" action="/login">
+ <label for="login-email">Adresse e-mail<input id="login-email" type="email" name="email" required autocomplete="username" placeholder="prenom@exemple.com"></label>
+ <label for="login-password">Mot de passe<input id="login-password" type="password" name="password" required autocomplete="current-password" placeholder="Votre mot de passe"></label>
+ <button class="btn primary full" type="submit">Accéder à mon espace <span aria-hidden="true">→</span></button>
+ </form><div class="smallprint">Votre compte est créé par l'équipe de recherche. Contactez un administrateur si vous n'avez pas encore vos identifiants.</div></div>
 </section></div>
 {% endblock %}
