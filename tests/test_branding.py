@@ -58,7 +58,7 @@ def test_responsive_logo(branding_site, width, view):
             assert logo.get_attribute('alt') == 'Logo ChadVoice'
             assert logo.evaluate('(img) => img.complete && img.naturalWidth > 0')
             box = logo.bounding_box()
-            expected = (72 if width <= 800 else 120) if view == 'login' else (32 if width <= 800 else 42)
+            expected = (65 if width <= 540 else 83) if view == 'login' else (32 if width <= 800 else 42)
             assert box['width'] == box['height'] == expected
             assert logo.evaluate('(img) => getComputedStyle(img).objectFit') == 'contain'
             assert box['x'] >= 0 and box['x'] + box['width'] <= width

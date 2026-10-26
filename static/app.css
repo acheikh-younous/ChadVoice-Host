@@ -115,7 +115,7 @@ tbody tr:hover{background:#fbfdff}
 .login-form input{min-height:46px;background:#f9fcff!important}
 .login-form .btn{min-height:48px;font-size:.92rem}
 .smallprint{color:#6b8195;line-height:1.6}
-.sidebar-scrim,.menu-toggle{display:none}
+.sidebar-scrim,.menu-toggle,.menu-close{display:none}
 .mobile-top{background:#fff}
 @media(max-width:1100px){.login-shell{grid-template-columns:1fr 1fr}.login-hero{padding:38px}.login-hero h1{font-size:2.9rem}.login-form{padding:23px}.login-form-panel{padding:25px}}
 @media(max-width:800px){
@@ -125,7 +125,9 @@ tbody tr:hover{background:#fbfdff}
  .sidebar .brand{display:flex}.sidebar .group-label,.sidebar-bottom{display:block}
  .sidebar nav{display:flex;flex-direction:column;overflow:visible;white-space:normal}
  .sidebar .nav{padding:12px;font-size:.9rem}
- body.menu-open .sidebar{transform:translateX(0)}
+ .sidebar{visibility:hidden}
+ body.menu-open .sidebar{transform:translateX(0);visibility:visible}
+ .menu-close{display:flex;align-items:center;justify-content:space-between;width:100%;margin-bottom:16px;padding:10px 12px;border:1px solid #7799bb;border-radius:9px;background:#245585;color:#fff}
  .sidebar-scrim{display:none;position:fixed;inset:0;background:rgba(10,30,50,.55);z-index:1000}
  body.menu-open .sidebar-scrim{display:block}
  body.menu-open{overflow:hidden}
@@ -171,3 +173,7 @@ tbody tr:hover{background:#fbfdff}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
 
 .admin-shortcuts{display:flex;flex-wrap:wrap;gap:11px;margin-top:16px}.admin-shortcuts .btn{flex:1 1 190px}
+progress.progress{appearance:none;border:0;display:block;width:100%;color:#175fae}
+progress.progress::-webkit-progress-bar{background:#e3ecf8;border-radius:99px}
+progress.progress::-webkit-progress-value{background:linear-gradient(90deg,#4c9fe4,#175fae);border-radius:99px}
+progress.progress::-moz-progress-bar{background:linear-gradient(90deg,#4c9fe4,#175fae);border-radius:99px}

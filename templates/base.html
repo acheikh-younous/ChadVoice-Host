@@ -1,7 +1,8 @@
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}ChadVoice{% endblock %} · Plateforme de traduction</title><link rel="stylesheet" href="/static/app.css"></head>
 <body>
-{% if user %}<div class="layout"><div class="sidebar-scrim" data-menu-close></div><aside class="sidebar" id="primary-sidebar" aria-label="Navigation principale">
+{% if user %}<div class="layout"><div class="sidebar-scrim" data-menu-close aria-hidden="true"></div><aside class="sidebar" id="primary-sidebar" aria-label="Navigation principale">
+  <button class="menu-close" type="button" data-menu-close aria-label="Fermer le menu">Fermer <span aria-hidden="true">×</span></button>
   <div class="brand"><img src="/static/chadvoice-logo.png" alt="Logo ChadVoice" class="brand-logo" width="42" height="42"><div><strong>ChadVoice</strong><small>Corpus collaboratif</small></div></div>
   <div class="group-label">ESPACE DE TRAVAIL</div>
   <nav aria-label="Navigation ChadVoice"><a href="/" class="nav{% if request.url.path=='/' %} active{% endif %}"><span>▦</span> Vue générale</a>
